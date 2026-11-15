@@ -17,6 +17,7 @@
 package core
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"errors"
 	"math/big"
@@ -32,6 +33,8 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
 )
+
+var address32Coinbase = common.HexToAddress("0x0101010101010101010101010101010101010101")
 
 const anvil0Key = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
@@ -103,41 +106,16 @@ func TestAddress32TransferMovesValue(t *testing.T) {
 	var otherWide common.Address32
 	otherWide[0] = 0x02
 	otherWide[31] = 0x43
-
-	db := rawdb.NewMemoryDatabase()
-	tdb := triedb.NewDatabase(db, triedb.HashDefaults)
-	genesis := &Genesis{
-		Config:     cfg,
-		Difficulty: big.NewInt(0),
-		GasLimit:   30_000_000,
-		BaseFee:    big.NewInt(1),
-		Alloc: types.GenesisAlloc{
-			legacySender: {Balance: big.NewInt(params.Ether)},
-			types.L1BlockAddr: {Storage: map[common.Hash]common.Hash{
-				types.L1FeeScalarsSlot:      {19: 1},
-				types.L1BaseFeeSlot:         common.BigToHash(big.NewInt(1_000_000)),
-				types.OperatorFeeParamsSlot: {31: 10},
-			}},
-		},
-		WideAlloc: map[common.Address32]types.Account{
-			wideSender: {Balance: big.NewInt(params.Ether)},
-		},
-	}
-	block, err := genesis.Commit(db, tdb)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	statedb, err := state.New(block.Root(), state.NewDatabase(tdb, nil))
-
-	if err != nil {
-		t.Fatal(err)
-	}
+	statedb, tdb := openAddress32State(t, cfg, types.GenesisAlloc{
+		legacySender:      {Balance: big.NewInt(params.Ether)},
+		types.L1BlockAddr: address32L1Account(),
+	}, map[common.Address32]types.Account{
+		wideSender: {Balance: big.NewInt(params.Ether)},
+	})
 
 	legacyToWide := signAddress32Tx(t, cfg, key, types.SenderKindLegacy, freshWide, 0, 1000)
 
-	if err := applyAddress32Tx(cfg, statedb, legacyToWide); err != nil {
+	if _, err := applyAddress32Tx(cfg, statedb, legacyToWide); err != nil {
 		t.Fatal(err)
 	}
 
@@ -162,7 +140,7 @@ func TestAddress32TransferMovesValue(t *testing.T) {
 
 	wideToLegacy := signAddress32Tx(t, cfg, key, types.SenderKindWide, legacyWord(freshLegacy), 0, 1000)
 
-	if err := applyAddress32Tx(cfg, statedb, wideToLegacy); err != nil {
+	if _, err := applyAddress32Tx(cfg, statedb, wideToLegacy); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +154,7 @@ func TestAddress32TransferMovesValue(t *testing.T) {
 
 	wideToWide := signAddress32Tx(t, cfg, key, types.SenderKindWide, otherWide, 1, 1000)
 
-	if err := applyAddress32Tx(cfg, statedb, wideToWide); err != nil {
+	if _, err := applyAddress32Tx(cfg, statedb, wideToWide); err != nil {
 		t.Fatal(err)
 	}
 
@@ -215,27 +193,10 @@ func TestAddress32TxRejectedBeforeFork(t *testing.T) {
 	var to common.Address32
 	to[0] = 1
 	tx := signAddress32Tx(t, address32Config(), key, types.SenderKindLegacy, to, 0, 1)
-	db := rawdb.NewMemoryDatabase()
-	tdb := triedb.NewDatabase(db, triedb.HashDefaults)
-	block, err := (&Genesis{
-		Config:     &cfg,
-		Difficulty: big.NewInt(0),
-		GasLimit:   30_000_000,
-		BaseFee:    big.NewInt(1),
-		Alloc:      types.GenesisAlloc{crypto.PubkeyToAddress(key.PublicKey): {Balance: big.NewInt(params.Ether)}},
-	}).Commit(db, tdb)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	statedb, err := state.New(block.Root(), state.NewDatabase(tdb, nil))
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = applyAddress32Tx(&cfg, statedb, tx)
+	statedb := address32State(t, &cfg, types.GenesisAlloc{
+		crypto.PubkeyToAddress(key.PublicKey): {Balance: big.NewInt(params.Ether)},
+	}, nil)
+	_, err := applyAddress32Tx(&cfg, statedb, tx)
 
 	if !errors.Is(err, ErrTxTypeNotSupported) {
 		t.Fatalf("pre-fork error = %v", err)
@@ -257,28 +218,190 @@ func TestAddress32CreationIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := rawdb.NewMemoryDatabase()
-	tdb := triedb.NewDatabase(db, triedb.HashDefaults)
-	block, err := (&Genesis{
-		Config:     cfg,
-		Difficulty: big.NewInt(0),
-		GasLimit:   30_000_000,
-		BaseFee:    big.NewInt(1),
-		Alloc:      types.GenesisAlloc{crypto.PubkeyToAddress(key.PublicKey): {Balance: big.NewInt(params.Ether)}},
-	}).Commit(db, tdb)
 
-	if err != nil {
-		t.Fatal(err)
-	}
+	statedb := address32State(t, cfg, types.GenesisAlloc{
+		crypto.PubkeyToAddress(key.PublicKey): {Balance: big.NewInt(params.Ether)},
+	}, nil)
 
-	statedb, err := state.New(block.Root(), state.NewDatabase(tdb, nil))
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := applyAddress32Tx(cfg, statedb, signed); err == nil {
+	if _, err := applyAddress32Tx(cfg, statedb, signed); err == nil {
 		t.Fatal("contract creation was applied")
+	}
+}
+
+func TestWideSenderCallToLegacyCodeReverts(t *testing.T) {
+	cfg := address32Config()
+	key := anvilKey(t)
+	wideSender, err := crypto.PubkeyToAddress32(key.PublicKey)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	callee := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	code, slot, stored, account := codedCallee()
+	statedb := address32State(t, cfg, types.GenesisAlloc{
+		crypto.PubkeyToAddress(key.PublicKey): {Balance: big.NewInt(params.Ether)},
+		callee:                                account,
+		types.L1BlockAddr:                     address32L1Account(),
+	}, map[common.Address32]types.Account{
+		wideSender: {Balance: big.NewInt(params.Ether)},
+	})
+	tx := signAddress32Tx(t, cfg, key, types.SenderKindWide, legacyWord(callee), 0, 1000)
+	recovered, err := types.SenderAccount(types.LatestSigner(cfg), tx)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := recovered.Address32()
+
+	if !ok || got != wideSender {
+		t.Fatalf("recovered sender = %v, want %s", recovered, wideSender.Hex())
+	}
+
+	sender := wideAccountReader(statedb, wideSender)
+	before := sender.balance().Clone()
+	receipt, err := applyAddress32Tx(cfg, statedb, tx)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertIncludedRevert(t, statedb, receipt, before, sender, legacyAccountReader(statedb, callee), code, slot, stored)
+}
+
+func TestLegacySenderCallToWideCodeReverts(t *testing.T) {
+	cfg := address32Config()
+	key := anvilKey(t)
+	legacySender := crypto.PubkeyToAddress(key.PublicKey)
+	var callee common.Address32
+	callee[0] = 0x01
+	callee[31] = 0x42
+	code, slot, stored, account := codedCallee()
+	statedb := address32State(t, cfg, types.GenesisAlloc{
+		legacySender:      {Balance: big.NewInt(params.Ether)},
+		types.L1BlockAddr: address32L1Account(),
+	}, map[common.Address32]types.Account{
+		callee: account,
+	})
+	tx := signAddress32Tx(t, cfg, key, types.SenderKindLegacy, callee, 0, 1000)
+	recovered, err := types.SenderAccount(types.LatestSigner(cfg), tx)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := recovered.Legacy()
+
+	if !ok || got != legacySender {
+		t.Fatalf("recovered sender = %v, want %s", recovered, legacySender.Hex())
+	}
+
+	sender := legacyAccountReader(statedb, legacySender)
+	before := sender.balance().Clone()
+	receipt, err := applyAddress32Tx(cfg, statedb, tx)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertIncludedRevert(t, statedb, receipt, before, sender, wideAccountReader(statedb, callee), code, slot, stored)
+}
+
+func TestDelegationCountsAsCode(t *testing.T) {
+	cfg := address32Config()
+	key := anvilKey(t)
+	wideSender, err := crypto.PubkeyToAddress32(key.PublicKey)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	callee := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	delegated := common.HexToAddress("0x4444444444444444444444444444444444444444")
+	code := types.AddressToDelegation(delegated)
+	_, slot, stored, account := codedCallee()
+	account.Code = code
+	statedb := address32State(t, cfg, types.GenesisAlloc{
+		crypto.PubkeyToAddress(key.PublicKey): {Balance: big.NewInt(params.Ether)},
+		callee:                                account,
+		types.L1BlockAddr:                     address32L1Account(),
+	}, map[common.Address32]types.Account{
+		wideSender: {Balance: big.NewInt(params.Ether)},
+	})
+	tx := signAddress32Tx(t, cfg, key, types.SenderKindWide, legacyWord(callee), 0, 1000)
+	sender := wideAccountReader(statedb, wideSender)
+	before := sender.balance().Clone()
+	receipt, err := applyAddress32Tx(cfg, statedb, tx)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertIncludedRevert(t, statedb, receipt, before, sender, legacyAccountReader(statedb, callee), code, slot, stored)
+}
+
+func TestAddress32TargetCodeDoesNotAffectSignature(t *testing.T) {
+	cfg := address32Config()
+	key := anvilKey(t)
+	wideSender, err := crypto.PubkeyToAddress32(key.PublicKey)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	coded := common.HexToAddress("0x5555555555555555555555555555555555555555")
+	codeless := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	signer := types.LatestSigner(cfg)
+	toCode := signAddress32Tx(t, cfg, key, types.SenderKindWide, legacyWord(coded), 0, 1000)
+	toEmpty := signAddress32Tx(t, cfg, key, types.SenderKindWide, legacyWord(codeless), 1, 1000)
+
+	for _, tx := range []*types.Transaction{toCode, toEmpty} {
+		recovered, err := types.SenderAccount(signer, tx)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got, ok := recovered.Address32()
+
+		if !ok || got != wideSender {
+			t.Fatalf("recovered sender = %v, want %s", recovered, wideSender.Hex())
+		}
+	}
+
+	statedb := address32State(t, cfg, types.GenesisAlloc{
+		coded:             {Balance: big.NewInt(77), Code: []byte{0xfe}},
+		types.L1BlockAddr: address32L1Account(),
+	}, map[common.Address32]types.Account{
+		wideSender: {Balance: big.NewInt(params.Ether)},
+	})
+	receipt, err := applyAddress32Tx(cfg, statedb, toCode)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if receipt.Status != types.ReceiptStatusFailed {
+		t.Fatalf("coded target status = %d, want failed", receipt.Status)
+	}
+
+	if got := statedb.GetBalance(coded); got.Cmp(uint256.NewInt(77)) != 0 {
+		t.Fatalf("coded target balance = %s, want 77", got)
+	}
+
+	codelessReceipt, err := applyAddress32Tx(cfg, statedb, toEmpty)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if codelessReceipt.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("codeless target status = %d, want success", codelessReceipt.Status)
+	}
+
+	if got := statedb.GetBalance(codeless); got.Cmp(uint256.NewInt(1000)) != 0 {
+		t.Fatalf("codeless target balance = %s, want 1000", got)
 	}
 }
 
@@ -332,18 +455,147 @@ func signAddress32Tx(t *testing.T, cfg *params.ChainConfig, key *ecdsa.PrivateKe
 	return signed
 }
 
-func applyAddress32Tx(cfg *params.ChainConfig, statedb *state.StateDB, tx *types.Transaction) error {
+func address32L1Account() types.Account {
+	return types.Account{Storage: map[common.Hash]common.Hash{
+		types.L1FeeScalarsSlot:      {19: 1},
+		types.L1BaseFeeSlot:         common.BigToHash(big.NewInt(1_000_000)),
+		types.OperatorFeeParamsSlot: {31: 10},
+	}}
+}
+
+func codedCallee() (code []byte, slot, stored common.Hash, account types.Account) {
+	code = []byte{0x63, 0xde, 0xad, 0xbe, 0xef}
+	slot[31] = 0x11
+	stored[31] = 0xab
+	account = types.Account{
+		Balance: big.NewInt(77),
+		Nonce:   7,
+		Code:    code,
+		Storage: map[common.Hash]common.Hash{slot: stored},
+	}
+	return
+}
+
+// accountReader reads one legacy account or one Address32 after a transaction.
+type accountReader struct {
+	balance func() *uint256.Int
+	nonce   func() uint64
+	code    func() []byte
+	storage func(common.Hash) common.Hash
+}
+
+func legacyAccountReader(statedb *state.StateDB, addr common.Address) accountReader {
+	return accountReader{
+		balance: func() *uint256.Int { return statedb.GetBalance(addr) },
+		nonce:   func() uint64 { return statedb.GetNonce(addr) },
+		code:    func() []byte { return statedb.GetCode(addr) },
+		storage: func(key common.Hash) common.Hash { return statedb.GetState(addr, key) },
+	}
+}
+
+func wideAccountReader(statedb *state.StateDB, addr common.Address32) accountReader {
+	return accountReader{
+		balance: func() *uint256.Int { return statedb.Address32Balance(addr) },
+		nonce:   func() uint64 { return statedb.Address32Nonce(addr) },
+		code:    func() []byte { return statedb.Address32Code(addr) },
+		storage: func(key common.Hash) common.Hash { return statedb.Address32State(addr, key) },
+	}
+}
+
+func assertIncludedRevert(t *testing.T, statedb *state.StateDB, receipt *types.Receipt, senderBefore *uint256.Int, sender, callee accountReader, code []byte, slot, stored common.Hash) {
+	t.Helper()
+
+	if receipt.Status != types.ReceiptStatusFailed {
+		t.Fatalf("status = %d, want failed", receipt.Status)
+	}
+
+	if sender.nonce() != 1 {
+		t.Fatalf("sender nonce = %d, want 1", sender.nonce())
+	}
+
+	if got := callee.balance(); got.Cmp(uint256.NewInt(77)) != 0 {
+		t.Fatalf("callee balance = %s, want 77", got)
+	}
+
+	if callee.nonce() != 7 {
+		t.Fatalf("callee nonce = %d, want 7", callee.nonce())
+	}
+
+	if !bytes.Equal(callee.code(), code) {
+		t.Fatalf("callee code = %x, want %x", callee.code(), code)
+	}
+
+	if callee.storage(slot) != stored {
+		t.Fatalf("callee storage = %s, want %s", callee.storage(slot), stored)
+	}
+
+	spent := new(uint256.Int).Sub(senderBefore, sender.balance())
+	assertAddress32Fees(t, statedb, spent)
+}
+
+func address32State(t *testing.T, cfg *params.ChainConfig, alloc types.GenesisAlloc, wide map[common.Address32]types.Account) *state.StateDB {
+	t.Helper()
+	statedb, _ := openAddress32State(t, cfg, alloc, wide)
+	return statedb
+}
+
+func openAddress32State(t *testing.T, cfg *params.ChainConfig, alloc types.GenesisAlloc, wide map[common.Address32]types.Account) (*state.StateDB, *triedb.Database) {
+	t.Helper()
+	db := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(db, triedb.HashDefaults)
+	block, err := (&Genesis{
+		Config:     cfg,
+		Difficulty: big.NewInt(0),
+		GasLimit:   30_000_000,
+		BaseFee:    big.NewInt(1),
+		Alloc:      alloc,
+		WideAlloc:  wide,
+	}).Commit(db, tdb)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	statedb, err := state.New(block.Root(), state.NewDatabase(tdb, nil))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return statedb, tdb
+}
+
+func assertAddress32Fees(t *testing.T, statedb *state.StateDB, spent *uint256.Int) {
+	t.Helper()
+	base := statedb.GetBalance(params.OptimismBaseFeeRecipient).Clone()
+	l1 := statedb.GetBalance(params.OptimismL1FeeRecipient).Clone()
+	operator := statedb.GetBalance(params.OptimismOperatorFeeRecipient).Clone()
+	coinbase := statedb.GetBalance(address32Coinbase).Clone()
+
+	if base.Sign() == 0 || l1.Sign() == 0 || operator.Sign() == 0 || coinbase.Sign() == 0 {
+		t.Fatalf("fees base %s l1 %s operator %s coinbase %s", base, l1, operator, coinbase)
+	}
+
+	credited := new(uint256.Int).Add(base, l1)
+	credited.Add(credited, operator)
+	credited.Add(credited, coinbase)
+
+	if spent.Cmp(credited) != 0 {
+		t.Fatalf("sender spent %s, fee recipients received %s", spent, credited)
+	}
+}
+
+func applyAddress32Tx(cfg *params.ChainConfig, statedb *state.StateDB, tx *types.Transaction) (*types.Receipt, error) {
 	header := &types.Header{
 		Number:     big.NewInt(1),
 		Time:       1,
 		BaseFee:    big.NewInt(1),
 		GasLimit:   30_000_000,
 		Difficulty: big.NewInt(0),
-		Coinbase:   common.HexToAddress("0x0101010101010101010101010101010101010101"),
+		Coinbase:   address32Coinbase,
 	}
 	coinbase := header.Coinbase
 	evm := vm.NewEVM(NewEVMBlockContext(header, nil, &coinbase, cfg, statedb), statedb, cfg, vm.Config{})
 	gp := new(GasPool).AddGas(header.GasLimit)
-	_, err := ApplyTransaction(evm, gp, statedb, header, tx, new(uint64))
-	return err
+	return ApplyTransaction(evm, gp, statedb, header, tx, new(uint64))
 }
