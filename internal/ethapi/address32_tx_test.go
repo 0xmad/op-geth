@@ -62,7 +62,7 @@ func TestAddress32TransactionRPC(t *testing.T) {
 		Gas:        params.TxGas,
 		To:         word,
 		Value:      big.NewInt(1),
-		SenderKind: types.SenderKindLegacy,
+		SenderKind: types.SenderKindAddress20,
 	}), types.LatestSigner(&cfg), key)
 
 	if err != nil {

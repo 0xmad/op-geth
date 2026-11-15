@@ -28,10 +28,10 @@ import (
 type StateAddressKind uint8
 
 const (
-	// StateAddressLegacy is a 20-byte account. The zero StateAddress has this kind.
-	StateAddressLegacy StateAddressKind = iota
+	// StateAddress20 is a 20-byte account. The zero StateAddress has this kind.
+	StateAddress20 StateAddressKind = iota
 	// StateAddress32 is an Address32. A 32-byte word whose top 12 bytes are zero
-	// is StateAddressLegacy, the account in the low 20 bytes.
+	// is StateAddress20, the account in the low 20 bytes.
 	StateAddress32
 )
 
@@ -41,16 +41,16 @@ type StateAddress struct {
 	data [Address32Length]byte
 }
 
-// LegacyStateAddress names a 20-byte account.
-func LegacyStateAddress(addr Address) StateAddress {
+// Address20StateAddress names a 20-byte account.
+func Address20StateAddress(addr Address) StateAddress {
 	var out StateAddress
-	out.kind = StateAddressLegacy
+	out.kind = StateAddress20
 	copy(out.data[:], addr[:])
 	return out
 }
 
-// WideStateAddress names an Address32.
-func WideStateAddress(addr Address32) StateAddress {
+// Address32StateAddress names an Address32.
+func Address32StateAddress(addr Address32) StateAddress {
 	var out StateAddress
 	out.kind = StateAddress32
 	copy(out.data[:], addr[:])
@@ -58,33 +58,33 @@ func WideStateAddress(addr Address32) StateAddress {
 }
 
 // StateAddressFromWord names the account in a 32-byte word.
-// Twelve leading zero bytes select the legacy account in the low 20 bytes.
+// Twelve leading zero bytes select the address20 in the low 20 bytes.
 func StateAddressFromWord(word []byte) (StateAddress, error) {
 	if len(word) != Address32Length {
 		return StateAddress{}, fmt.Errorf("state address word must be 32 bytes, have %d", len(word))
 	}
 
-	if legacy, ok := LegacyAddressOf(word); ok {
-		return LegacyStateAddress(legacy), nil
+	if address20, ok := Address20Of(word); ok {
+		return Address20StateAddress(address20), nil
 	}
 
-	wide, err := NewAddress32(word)
+	address32, err := NewAddress32(word)
 
 	if err != nil {
 		return StateAddress{}, err
 	}
 
-	return WideStateAddress(wide), nil
+	return Address32StateAddress(address32), nil
 }
 
 // Kind reports which account form this holds.
 func (a StateAddress) Kind() StateAddressKind { return a.kind }
 
 // Word32 returns the 32-byte transaction word for this account.
-// A legacy account is the 20-byte address with 12 leading zero bytes.
+// An address20 is the 20-byte address with 12 leading zero bytes.
 func (a StateAddress) Word32() ([]byte, error) {
 	switch a.kind {
-	case StateAddressLegacy:
+	case StateAddress20:
 		out := make([]byte, Address32Length)
 		copy(out[Address32Length-AddressLength:], a.data[:AddressLength])
 		return out, nil
@@ -97,9 +97,9 @@ func (a StateAddress) Word32() ([]byte, error) {
 	}
 }
 
-// Legacy returns the 20-byte account. ok is false for any other kind.
-func (a StateAddress) Legacy() (Address, bool) {
-	if a.kind != StateAddressLegacy {
+// Address20 returns the 20-byte account. ok is false for any other kind.
+func (a StateAddress) Address20() (Address, bool) {
+	if a.kind != StateAddress20 {
 		return Address{}, false
 	}
 
@@ -108,7 +108,7 @@ func (a StateAddress) Legacy() (Address, bool) {
 	return addr, true
 }
 
-// Address32 returns the wide account. ok is false for any other kind.
+// Address32 returns the address32 account. ok is false for any other kind.
 func (a StateAddress) Address32() (Address32, bool) {
 	if a.kind != StateAddress32 {
 		return Address32{}, false
@@ -122,7 +122,7 @@ func (a StateAddress) Address32() (Address32, bool) {
 // Preimage returns the bytes hashed into the account trie key.
 func (a StateAddress) Preimage() ([]byte, error) {
 	switch a.kind {
-	case StateAddressLegacy:
+	case StateAddress20:
 		out := make([]byte, AddressLength)
 		copy(out, a.data[:AddressLength])
 		return out, nil
@@ -135,7 +135,7 @@ func (a StateAddress) Preimage() ([]byte, error) {
 	}
 }
 
-// MarshalText encodes a legacy account as 20-byte hex and an Address32 as
+// MarshalText encodes an address20 as 20-byte hex and an Address32 as
 // 32-byte hex. The encoding matches the existing RPC address encoding:
 // 0x-prefixed, lowercase, no checksum.
 func (a StateAddress) MarshalText() ([]byte, error) {
@@ -158,24 +158,24 @@ func (a *StateAddress) UnmarshalText(input []byte) error {
 
 	switch len(b) {
 	case AddressLength:
-		*a = StateAddress{kind: StateAddressLegacy}
+		*a = StateAddress{kind: StateAddress20}
 		copy(a.data[:], b)
 		return nil
 	case Address32Length:
-		if legacy, ok := LegacyAddressOf(b); ok {
-			*a = StateAddress{kind: StateAddressLegacy}
-			copy(a.data[:], legacy[:])
+		if address20, ok := Address20Of(b); ok {
+			*a = StateAddress{kind: StateAddress20}
+			copy(a.data[:], address20[:])
 			return nil
 		}
 
-		wide, err := NewAddress32(b)
+		address32, err := NewAddress32(b)
 
 		if err != nil {
 			return err
 		}
 
 		*a = StateAddress{kind: StateAddress32}
-		copy(a.data[:], wide[:])
+		copy(a.data[:], address32[:])
 		return nil
 	default:
 		return fmt.Errorf("state address must be 20 or 32 bytes, have %d", len(b))

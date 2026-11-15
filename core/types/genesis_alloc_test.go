@@ -24,7 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func TestParseGenesisAllocAcceptsWideKey(t *testing.T) {
+func TestParseGenesisAllocAcceptsAddress32Key(t *testing.T) {
 	const raw = `{
 		"1111111111111111111111111111111111111111111111111111111111111111": {"balance": "0x2a"},
 		"0x2222222222222222222222222222222222222222": {"balance": "0x1"}
@@ -36,7 +36,7 @@ func TestParseGenesisAllocAcceptsWideKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	legacy, wide := accounts.Legacy, accounts.Wide
+	address20, address32 := accounts.Address20, accounts.Address32
 
 	wantWide, err := common.NewAddress32(common.FromHex("0x1111111111111111111111111111111111111111111111111111111111111111"))
 
@@ -44,40 +44,40 @@ func TestParseGenesisAllocAcceptsWideKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	account, ok := wide[wantWide]
+	account, ok := address32[wantWide]
 
 	if !ok {
-		t.Fatal("wide account missing")
+		t.Fatal("address32 missing")
 	}
 
 	if account.Balance.Cmp(big.NewInt(42)) != 0 {
-		t.Fatalf("wide balance = %s, want 42", account.Balance)
+		t.Fatalf("address32 balance = %s, want 42", account.Balance)
 	}
 
-	legacyAddr := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	account, ok = legacy[legacyAddr]
+	address20Addr := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	account, ok = address20[address20Addr]
 
 	if !ok {
-		t.Fatal("legacy account missing")
+		t.Fatal("address20 missing")
 	}
 
 	if account.Balance.Cmp(big.NewInt(1)) != 0 {
-		t.Fatalf("legacy balance = %s, want 1", account.Balance)
+		t.Fatalf("address20 balance = %s, want 1", account.Balance)
 	}
 
-	if len(wide) != 1 || len(legacy) != 1 {
-		t.Fatalf("legacy=%d wide=%d, want 1 and 1", len(legacy), len(wide))
+	if len(address32) != 1 || len(address20) != 1 {
+		t.Fatalf("address20=%d address32=%d, want 1 and 1", len(address20), len(address32))
 	}
 }
 
-func TestParseGenesisAllocRejectsLegacySubspace(t *testing.T) {
+func TestParseGenesisAllocRejectsAddress20Subspace(t *testing.T) {
 	const raw = `{
 		"0000000000000000000000002222222222222222222222222222222222222222": {"balance": "0x1"}
 	}`
 
 	_, err := ParseGenesisAlloc([]byte(raw))
 
-	if !errors.Is(err, common.ErrAddress32LegacySubspace) {
-		t.Fatalf("ParseGenesisAlloc() error = %v, want ErrAddress32LegacySubspace", err)
+	if !errors.Is(err, common.ErrAddress32InAddress20Subspace) {
+		t.Fatalf("ParseGenesisAlloc() error = %v, want ErrAddress32InAddress20Subspace", err)
 	}
 }

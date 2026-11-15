@@ -32,40 +32,40 @@ import (
 )
 
 const (
-	wideAllocKey   = "1111111111111111111111111111111111111111111111111111111111111111"
-	legacyAllocKey = "2222222222222222222222222222222222222222"
-	// keccak256 of the 32-byte wideAllocKey.
-	wideTrieKey = "b569321de72d0af89c2fb48a484de3fc9343f31600ae1f3e13d633cb48cbf816"
-	// keccak256 of the 20-byte legacyAllocKey.
-	legacyTrieKey = "2ab0a4443bbea3fbe4d0e1503d11ff1367842fb0c8b28a5c8550f27599a40751"
-	// keccak256 of legacyAllocKey left-padded to 32 bytes. That is not the legacy trie key.
+	address32AllocKey = "1111111111111111111111111111111111111111111111111111111111111111"
+	address20AllocKey = "2222222222222222222222222222222222222222"
+	// keccak256 of the 32-byte address32AllocKey.
+	address32TrieKey = "b569321de72d0af89c2fb48a484de3fc9343f31600ae1f3e13d633cb48cbf816"
+	// keccak256 of the 20-byte address20AllocKey.
+	address20TrieKey = "2ab0a4443bbea3fbe4d0e1503d11ff1367842fb0c8b28a5c8550f27599a40751"
+	// keccak256 of address20AllocKey left-padded to 32 bytes. That is not the address20 trie key.
 	paddedTrieKey = "761d1673706b12d7996f463b3ee41f89445e41739a7b2688d9e00d8e45cf27f3"
 )
 
-func TestGenesisJSONRejectsWideAccountWhenAddress32Unset(t *testing.T) {
+func TestGenesisJSONRejectsAddress32AccountWhenUnset(t *testing.T) {
 	raw := `{
 		"config": {"chainId": 1},
 		"gasLimit": "0x1",
 		"difficulty": "0x0",
-		"alloc": {"` + wideAllocKey + `": {"balance": "0x1"}}
+		"alloc": {"` + address32AllocKey + `": {"balance": "0x1"}}
 	}`
 	var genesis Genesis
 
 	if err := json.Unmarshal([]byte(raw), &genesis); err == nil {
-		t.Fatal("wide genesis account was accepted with Address32 unset")
-	} else if !errors.Is(err, errWideGenesisRequiresAddress32) {
-		t.Fatalf("Unmarshal() error = %v, want errWideGenesisRequiresAddress32", err)
+		t.Fatal("address32 genesis account was accepted with Address32 unset")
+	} else if !errors.Is(err, errAddress32GenesisRequiresFork) {
+		t.Fatalf("Unmarshal() error = %v, want errAddress32GenesisRequiresFork", err)
 	}
 }
 
-func TestGenesisJSONAcceptsWideAccountWhenAddress32Active(t *testing.T) {
+func TestGenesisJSONAcceptsAddress32AccountWhenActive(t *testing.T) {
 	raw := `{
 		"config": {"chainId": 1, "address32Time": 0},
 		"gasLimit": "0x1",
 		"difficulty": "0x0",
 		"alloc": {
-			"` + wideAllocKey + `": {"balance": "0x2a", "nonce": "0x4"},
-			"` + legacyAllocKey + `": {"balance": "0x7"}
+			"` + address32AllocKey + `": {"balance": "0x2a", "nonce": "0x4"},
+			"` + address20AllocKey + `": {"balance": "0x7"}
 		}
 	}`
 
@@ -75,20 +75,20 @@ func TestGenesisJSONAcceptsWideAccountWhenAddress32Active(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wide, err := common.NewAddress32(common.FromHex(wideAllocKey))
+	address32, err := common.NewAddress32(common.FromHex(address32AllocKey))
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if genesis.WideAlloc[wide].Balance.Cmp(big.NewInt(42)) != 0 {
-		t.Fatalf("wide balance = %v, want 42", genesis.WideAlloc[wide].Balance)
+	if genesis.Address32Alloc[address32].Balance.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("address32 balance = %v, want 42", genesis.Address32Alloc[address32].Balance)
 	}
 
-	legacy := common.HexToAddress(legacyAllocKey)
+	address20 := common.HexToAddress(address20AllocKey)
 
-	if genesis.Alloc[legacy].Balance.Cmp(big.NewInt(7)) != 0 {
-		t.Fatalf("legacy balance = %v, want 7", genesis.Alloc[legacy].Balance)
+	if genesis.Alloc[address20].Balance.Cmp(big.NewInt(7)) != 0 {
+		t.Fatalf("address20 balance = %v, want 7", genesis.Alloc[address20].Balance)
 	}
 
 	blob, err := json.Marshal(genesis)
@@ -103,17 +103,17 @@ func TestGenesisJSONAcceptsWideAccountWhenAddress32Active(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if again.WideAlloc[wide].Balance.Cmp(big.NewInt(42)) != 0 {
-		t.Fatalf("round-trip wide balance = %v, want 42", again.WideAlloc[wide].Balance)
+	if again.Address32Alloc[address32].Balance.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("round-trip address32 balance = %v, want 42", again.Address32Alloc[address32].Balance)
 	}
 
-	if again.Alloc[legacy].Balance.Cmp(big.NewInt(7)) != 0 {
-		t.Fatalf("round-trip legacy balance = %v, want 7", again.Alloc[legacy].Balance)
+	if again.Alloc[address20].Balance.Cmp(big.NewInt(7)) != 0 {
+		t.Fatalf("round-trip address20 balance = %v, want 7", again.Alloc[address20].Balance)
 	}
 }
 
-func TestCommitRejectsWideAccountWhenAddress32Unset(t *testing.T) {
-	wide, err := common.NewAddress32(common.FromHex(wideAllocKey))
+func TestCommitRejectsAddress32AccountWhenUnset(t *testing.T) {
+	address32, err := common.NewAddress32(common.FromHex(address32AllocKey))
 
 	if err != nil {
 		t.Fatal(err)
@@ -123,26 +123,26 @@ func TestCommitRejectsWideAccountWhenAddress32Unset(t *testing.T) {
 		Config:     params.TestChainConfig,
 		Difficulty: big.NewInt(0),
 		GasLimit:   1,
-		WideAlloc: map[common.Address32]types.Account{
-			wide: {Balance: big.NewInt(1)},
+		Address32Alloc: map[common.Address32]types.Account{
+			address32: {Balance: big.NewInt(1)},
 		},
 	}
 	db := rawdb.NewMemoryDatabase()
 	_, err = genesis.Commit(db, triedb.NewDatabase(db, triedb.HashDefaults))
 
-	if !errors.Is(err, errWideGenesisRequiresAddress32) {
-		t.Fatalf("Commit() error = %v, want errWideGenesisRequiresAddress32", err)
+	if !errors.Is(err, errAddress32GenesisRequiresFork) {
+		t.Fatalf("Commit() error = %v, want errAddress32GenesisRequiresFork", err)
 	}
 }
 
-func TestWideGenesisAccountTrieKey(t *testing.T) {
-	wide, err := common.NewAddress32(common.FromHex(wideAllocKey))
+func TestAddress32GenesisAccountTrieKey(t *testing.T) {
+	address32, err := common.NewAddress32(common.FromHex(address32AllocKey))
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	legacy := common.HexToAddress(legacyAllocKey)
+	address20 := common.HexToAddress(address20AllocKey)
 	ts := uint64(0)
 	cfg := *params.TestChainConfig
 	cfg.Address32Time = &ts
@@ -151,10 +151,10 @@ func TestWideGenesisAccountTrieKey(t *testing.T) {
 		Difficulty: big.NewInt(0),
 		GasLimit:   1,
 		Alloc: types.GenesisAlloc{
-			legacy: {Balance: big.NewInt(7)},
+			address20: {Balance: big.NewInt(7)},
 		},
-		WideAlloc: map[common.Address32]types.Account{
-			wide: {Balance: big.NewInt(42), Nonce: 4},
+		Address32Alloc: map[common.Address32]types.Account{
+			address32: {Balance: big.NewInt(42), Nonce: 4},
 		},
 	}
 	db := rawdb.NewMemoryDatabase()
@@ -171,24 +171,24 @@ func TestWideGenesisAccountTrieKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wideAcc, err := tr.GetAccountByHash(common.HexToHash(wideTrieKey))
+	address32Acc, err := tr.GetAccountByHash(common.HexToHash(address32TrieKey))
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if wideAcc == nil || wideAcc.Balance.Cmp(uint256.NewInt(42)) != 0 || wideAcc.Nonce != 4 {
-		t.Fatalf("wide account = %+v, want balance 42 nonce 4", wideAcc)
+	if address32Acc == nil || address32Acc.Balance.Cmp(uint256.NewInt(42)) != 0 || address32Acc.Nonce != 4 {
+		t.Fatalf("address32 = %+v, want balance 42 nonce 4", address32Acc)
 	}
 
-	legacyAcc, err := tr.GetAccountByHash(common.HexToHash(legacyTrieKey))
+	address20Acc, err := tr.GetAccountByHash(common.HexToHash(address20TrieKey))
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if legacyAcc == nil || legacyAcc.Balance.Cmp(uint256.NewInt(7)) != 0 {
-		t.Fatalf("legacy account = %+v, want balance 7", legacyAcc)
+	if address20Acc == nil || address20Acc.Balance.Cmp(uint256.NewInt(7)) != 0 {
+		t.Fatalf("address20 = %+v, want balance 7", address20Acc)
 	}
 
 	padded, err := tr.GetAccountByHash(common.HexToHash(paddedTrieKey))
@@ -198,6 +198,6 @@ func TestWideGenesisAccountTrieKey(t *testing.T) {
 	}
 
 	if padded != nil {
-		t.Fatal("legacy account was stored under the zero-padded 32-byte word")
+		t.Fatal("address20 was stored under the zero-padded 32-byte word")
 	}
 }

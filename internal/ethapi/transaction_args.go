@@ -73,11 +73,11 @@ type TransactionArgs struct {
 	AuthorizationList []types.SetCodeAuthorization `json:"authorizationList"`
 
 	// SenderKind selects the account that pays for a type 0x05 call.
-	SenderKind      *hexutil.Uint64 `json:"senderKind,omitempty"`
-	fromAccount     *common.StateAddress
-	toAccount       *common.StateAddress
-	address32Access types.Address32AccessList
-	wideAccess      bool
+	SenderKind         *hexutil.Uint64 `json:"senderKind,omitempty"`
+	fromAccount        *common.StateAddress
+	toAccount          *common.StateAddress
+	address32Access    types.Address32AccessList
+	hasAddress32Access bool
 }
 
 // from retrieves the transaction sender address.
@@ -585,11 +585,11 @@ func (args *TransactionArgs) setFlexibleAddress(raw json.RawMessage, from bool) 
 			args.toAccount = &account
 		}
 
-		if legacy, ok := account.Legacy(); ok {
+		if address20, ok := account.Address20(); ok {
 			if from {
-				args.From = &legacy
+				args.From = &address20
 			} else {
-				args.To = &legacy
+				args.To = &address20
 			}
 		}
 	default:
@@ -605,18 +605,18 @@ func (args *TransactionArgs) checkSenderKind() error {
 
 	kind := uint64(*args.SenderKind)
 
-	if kind != types.SenderKindLegacy && kind != types.SenderKindWide {
+	if kind != types.SenderKindAddress20 && kind != types.SenderKindAddress32 {
 		return types.ErrInvalidSenderKind
 	}
 
-	wide := args.fromAccount != nil && args.fromAccount.Kind() == common.StateAddress32
+	address32From := args.fromAccount != nil && args.fromAccount.Kind() == common.StateAddress32
 
-	if kind == types.SenderKindWide && !wide && (args.From != nil || args.fromAccount != nil) {
-		return fmt.Errorf("sender kind 1 requires a wide from")
+	if kind == types.SenderKindAddress32 && !address32From && (args.From != nil || args.fromAccount != nil) {
+		return fmt.Errorf("sender kind 1 requires an address32 from")
 	}
 
-	if kind == types.SenderKindLegacy && wide {
-		return fmt.Errorf("sender kind 0 requires a legacy from")
+	if kind == types.SenderKindAddress20 && address32From {
+		return fmt.Errorf("sender kind 0 requires an address20 from")
 	}
 
 	return nil
@@ -636,8 +636,8 @@ func (args *TransactionArgs) setAccessList(raw json.RawMessage) error {
 		return err
 	}
 
-	legacy := make(types.AccessList, 0, len(entries))
-	wide := make(types.Address32AccessList, 0, len(entries))
+	address20 := make(types.AccessList, 0, len(entries))
+	address32 := make(types.Address32AccessList, 0, len(entries))
 
 	for _, entry := range entries {
 		word, err := hexutil.Decode(entry.Address)
@@ -651,7 +651,7 @@ func (args *TransactionArgs) setAccessList(raw json.RawMessage) error {
 		switch len(word) {
 		case 20:
 			copy(full[12:], word)
-			legacy = append(legacy, types.AccessTuple{Address: common.BytesToAddress(word), StorageKeys: entry.StorageKeys})
+			address20 = append(address20, types.AccessTuple{Address: common.BytesToAddress(word), StorageKeys: entry.StorageKeys})
 		case 32:
 			account, err := common.StateAddressFromWord(word)
 
@@ -661,29 +661,29 @@ func (args *TransactionArgs) setAccessList(raw json.RawMessage) error {
 
 			copy(full[:], word)
 
-			if addr, ok := account.Legacy(); ok {
-				legacy = append(legacy, types.AccessTuple{Address: addr, StorageKeys: entry.StorageKeys})
+			if addr, ok := account.Address20(); ok {
+				address20 = append(address20, types.AccessTuple{Address: addr, StorageKeys: entry.StorageKeys})
 			} else {
-				args.wideAccess = true
+				args.hasAddress32Access = true
 			}
 		default:
 			return fmt.Errorf("access list address must be 20 or 32 bytes")
 		}
 
-		wide = append(wide, types.Address32AccessTuple{Address: full, StorageKeys: entry.StorageKeys})
+		address32 = append(address32, types.Address32AccessTuple{Address: full, StorageKeys: entry.StorageKeys})
 	}
 
-	if !args.wideAccess {
-		args.AccessList = &legacy
+	if !args.hasAddress32Access {
+		args.AccessList = &address20
 	}
 
-	args.address32Access = wide
+	args.address32Access = address32
 
 	return nil
 }
 
 func (args *TransactionArgs) address32Call() *core.Address32Call {
-	if args.SenderKind == nil && args.fromAccount == nil && args.toAccount == nil && !args.wideAccess {
+	if args.SenderKind == nil && args.fromAccount == nil && args.toAccount == nil && !args.hasAddress32Access {
 		return nil
 	}
 
@@ -692,7 +692,7 @@ func (args *TransactionArgs) address32Call() *core.Address32Call {
 	case args.fromAccount != nil:
 		from = *args.fromAccount
 	case args.From != nil:
-		from = common.LegacyStateAddress(*args.From)
+		from = common.Address20StateAddress(*args.From)
 	}
 	var to *common.StateAddress
 	switch {
@@ -700,16 +700,16 @@ func (args *TransactionArgs) address32Call() *core.Address32Call {
 		recipient := *args.toAccount
 		to = &recipient
 	case args.To != nil:
-		recipient := common.LegacyStateAddress(*args.To)
+		recipient := common.Address20StateAddress(*args.To)
 		to = &recipient
 	}
 
-	kind := byte(types.SenderKindLegacy)
+	kind := byte(types.SenderKindAddress20)
 
 	if args.SenderKind != nil {
 		kind = byte(*args.SenderKind)
 	} else if from.Kind() == common.StateAddress32 {
-		kind = types.SenderKindWide
+		kind = types.SenderKindAddress32
 	}
 
 	return &core.Address32Call{

@@ -25,12 +25,12 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
-func TestNewAddress32RejectsLegacySubspace(t *testing.T) {
+func TestNewAddress32RejectsAddress20Subspace(t *testing.T) {
 	raw := make([]byte, Address32Length)
 	raw[Address32Length-1] = 0x01
 
-	if _, err := NewAddress32(raw); !errors.Is(err, ErrAddress32LegacySubspace) {
-		t.Fatalf("NewAddress32() error = %v, want ErrAddress32LegacySubspace", err)
+	if _, err := NewAddress32(raw); !errors.Is(err, ErrAddress32InAddress20Subspace) {
+		t.Fatalf("NewAddress32() error = %v, want ErrAddress32InAddress20Subspace", err)
 	}
 }
 
@@ -39,10 +39,10 @@ func TestNewAddress32RejectsWrongWidth(t *testing.T) {
 		t.Fatal("NewAddress32 accepted a 20-byte address")
 	}
 
-	wide := make([]byte, Address32Length+1)
-	wide[0] = 0x01
+	address32 := make([]byte, Address32Length+1)
+	address32[0] = 0x01
 
-	if _, err := NewAddress32(wide); err == nil {
+	if _, err := NewAddress32(address32); err == nil {
 		t.Fatal("NewAddress32 cropped a value longer than 32 bytes")
 	}
 }
@@ -139,8 +139,8 @@ func TestAddress32HexRejectsShortAndLegacy(t *testing.T) {
 		t.Fatal("short hex accepted")
 	}
 
-	if err := got.UnmarshalText([]byte("0x00000000000000000000000000000000000000000000000000000000000000ab")); !errors.Is(err, ErrAddress32LegacySubspace) {
-		t.Fatalf("UnmarshalText() error = %v, want ErrAddress32LegacySubspace", err)
+	if err := got.UnmarshalText([]byte("0x00000000000000000000000000000000000000000000000000000000000000ab")); !errors.Is(err, ErrAddress32InAddress20Subspace) {
+		t.Fatalf("UnmarshalText() error = %v, want ErrAddress32InAddress20Subspace", err)
 	}
 }
 
@@ -152,14 +152,14 @@ func TestAddress32RLPRejectsShortString(t *testing.T) {
 	}
 }
 
-func TestAddress32RLPRejectsLegacySubspace(t *testing.T) {
+func TestAddress32RLPRejectsAddress20Subspace(t *testing.T) {
 	raw := make([]byte, Address32Length)
 	raw[Address32Length-1] = 0xab
 	enc := append([]byte{0xa0}, raw...)
 	var got Address32
 
-	if err := rlp.DecodeBytes(enc, &got); !errors.Is(err, ErrAddress32LegacySubspace) {
-		t.Fatalf("DecodeBytes() error = %v, want ErrAddress32LegacySubspace", err)
+	if err := rlp.DecodeBytes(enc, &got); !errors.Is(err, ErrAddress32InAddress20Subspace) {
+		t.Fatalf("DecodeBytes() error = %v, want ErrAddress32InAddress20Subspace", err)
 	}
 }
 

@@ -26,10 +26,10 @@ import (
 )
 
 const (
-	// SenderKindLegacy spends the 20-byte account derived from the signature.
-	SenderKindLegacy = 0
-	// SenderKindWide spends the Address32 derived from the signature.
-	SenderKindWide = 1
+	// SenderKindAddress20 spends the 20-byte account derived from the signature.
+	SenderKindAddress20 = 0
+	// SenderKindAddress32 spends the Address32 derived from the signature.
+	SenderKindAddress32 = 1
 )
 
 // ErrInvalidSenderKind is returned when a type 0x05 sender kind is not 0 or 1.
@@ -98,7 +98,7 @@ type Address32Tx struct {
 	Data []byte
 	// AccessList is the list of 32-byte addresses and storage keys to warm.
 	AccessList Address32AccessList
-	// SenderKind selects the account the signature spends. Kind 0 is the legacy account and kind 1 is the wide account.
+	// SenderKind selects the account the signature spends. Kind 0 is the address20 and kind 1 is the address32.
 	SenderKind uint8
 	// V is the signature y-parity, 0 or 1.
 	V *big.Int
@@ -195,13 +195,13 @@ func (tx *Address32Tx) to() *common.Address {
 		return nil
 	}
 
-	legacy, ok := common.LegacyAddressOf(tx.To[:])
+	address20, ok := common.Address20Of(tx.To[:])
 
 	if !ok {
 		return nil
 	}
 
-	return &legacy
+	return &address20
 }
 
 func (tx *Address32Tx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.Int {
@@ -239,7 +239,7 @@ func (tx *Address32Tx) decode(input []byte) error {
 }
 
 func (tx *Address32Tx) validate() error {
-	if tx.SenderKind != SenderKindLegacy && tx.SenderKind != SenderKindWide {
+	if tx.SenderKind != SenderKindAddress20 && tx.SenderKind != SenderKindAddress32 {
 		return ErrInvalidSenderKind
 	}
 

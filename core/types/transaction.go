@@ -51,7 +51,7 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	SetCodeTxType    = 0x04
-	// Address32TxType moves value between legacy and wide accounts.
+	// Address32TxType moves value between address20 and address32 accounts.
 	Address32TxType = 0x05
 )
 
@@ -342,14 +342,14 @@ func (tx *Transaction) EffectiveNonce() *uint64 {
 
 // To returns the recipient address of the transaction.
 // For contract-creation transactions, To returns nil.
-// A type 0x05 transaction returns the legacy account when the 32-byte
-// recipient has 12 leading zero bytes, and nil for a wide recipient.
+// A type 0x05 transaction returns the address20 when the 32-byte
+// recipient has 12 leading zero bytes, and nil for an address32 recipient.
 func (tx *Transaction) To() *common.Address {
 	return copyAddressPtr(tx.inner.to())
 }
 
 // CreatesContract reports whether the transaction deploys a contract.
-// A type 0x05 wide recipient is not a creation.
+// A type 0x05 address32 recipient is not a creation.
 func (tx *Transaction) CreatesContract() bool {
 	if inner, ok := tx.inner.(*Address32Tx); ok {
 		return inner.To == nil

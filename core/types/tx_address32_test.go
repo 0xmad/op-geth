@@ -47,7 +47,7 @@ func TestAddress32TxEnvelope(t *testing.T) {
 		Value:      big.NewInt(1000),
 		Data:       []byte{0x01},
 		AccessList: Address32AccessList{{Address: to, StorageKeys: []common.Hash{key}}},
-		SenderKind: SenderKindWide,
+		SenderKind: SenderKindAddress32,
 		V:          big.NewInt(1),
 		R:          big.NewInt(2),
 		S:          big.NewInt(3),
@@ -90,7 +90,7 @@ func TestAddress32TxEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if decoded.Type() != Address32TxType || decoded.Nonce() != 4 || decoded.Address32Tx().SenderKind != SenderKindWide {
+	if decoded.Type() != Address32TxType || decoded.Nonce() != 4 || decoded.Address32Tx().SenderKind != SenderKindAddress32 {
 		t.Fatalf("decoded type %d nonce %d kind %d", decoded.Type(), decoded.Nonce(), decoded.Address32Tx().SenderKind)
 	}
 
@@ -131,7 +131,7 @@ func TestAddress32TxSigHash(t *testing.T) {
 		To:         &to,
 		Value:      big.NewInt(5),
 		Data:       []byte{0xff},
-		SenderKind: SenderKindLegacy,
+		SenderKind: SenderKindAddress20,
 		V:          big.NewInt(0),
 		R:          big.NewInt(1),
 		S:          big.NewInt(1),
@@ -177,7 +177,7 @@ func TestAddress32TxRejectsBadFields(t *testing.T) {
 		big.NewInt(0),
 		[]byte{},
 		Address32AccessList{},
-		uint8(SenderKindLegacy),
+		uint8(SenderKindAddress20),
 		big.NewInt(0),
 		big.NewInt(1),
 		big.NewInt(1),
@@ -230,61 +230,61 @@ func TestAddress32TxRecovery(t *testing.T) {
 	var to Address32Word
 	to[0] = 0x44
 
-	legacyTx := signAddress32(t, signer, key, &Address32Tx{
+	address20Tx := signAddress32(t, signer, key, &Address32Tx{
 		ChainID:    cfg.ChainID,
 		GasTipCap:  big.NewInt(1),
 		GasFeeCap:  big.NewInt(2),
 		Gas:        21000,
 		To:         &to,
 		Value:      big.NewInt(1),
-		SenderKind: SenderKindLegacy,
+		SenderKind: SenderKindAddress20,
 	})
-	account, err := SenderAccount(signer, legacyTx)
+	account, err := SenderAccount(signer, address20Tx)
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	legacy, ok := account.Legacy()
+	address20, ok := account.Address20()
 
-	if !ok || legacy.Hex() != "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" {
-		t.Fatalf("legacy sender = %s, ok %v", legacy.Hex(), ok)
+	if !ok || address20.Hex() != "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" {
+		t.Fatalf("address20 sender = %s, ok %v", address20.Hex(), ok)
 	}
 
-	wideTx := signAddress32(t, signer, key, &Address32Tx{
+	address32Tx := signAddress32(t, signer, key, &Address32Tx{
 		ChainID:    cfg.ChainID,
 		GasTipCap:  big.NewInt(1),
 		GasFeeCap:  big.NewInt(2),
 		Gas:        21000,
 		To:         &to,
 		Value:      big.NewInt(1),
-		SenderKind: SenderKindWide,
+		SenderKind: SenderKindAddress32,
 	})
-	account, err = SenderAccount(signer, wideTx)
+	account, err = SenderAccount(signer, address32Tx)
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	wide, ok := account.Address32()
+	address32, ok := account.Address32()
 
-	if !ok || hex.EncodeToString(wide.Bytes()) != "66412934e73bd0f4e5ee7e9729291f30c6ad084b6de4a76eb74a4968314b32cd" {
-		t.Fatalf("wide sender = %x, ok %v", wide.Bytes(), ok)
+	if !ok || hex.EncodeToString(address32.Bytes()) != "66412934e73bd0f4e5ee7e9729291f30c6ad084b6de4a76eb74a4968314b32cd" {
+		t.Fatalf("address32 sender = %x, ok %v", address32.Bytes(), ok)
 	}
 
-	high := wideTx.Address32Tx()
+	high := address32Tx.Address32Tx()
 	high.S = new(big.Int).Sub(crypto.S256().Params().N, high.S)
 
-	if _, err := SenderAccount(signer, wideTx); !errors.Is(err, ErrInvalidSig) {
+	if _, err := SenderAccount(signer, address32Tx); !errors.Is(err, ErrInvalidSig) {
 		t.Fatalf("high s error = %v", err)
 	}
 }
 
-func TestAddress32SenderRejectsLegacySubspace(t *testing.T) {
+func TestAddress32SenderRejectsAddress20Subspace(t *testing.T) {
 	var word [32]byte
 	word[31] = 1
 
-	if _, err := address32Sender(word[:]); !errors.Is(err, common.ErrAddress32LegacySubspace) {
+	if _, err := address32Sender(word[:]); !errors.Is(err, common.ErrAddress32InAddress20Subspace) {
 		t.Fatalf("address32Sender() error = %v", err)
 	}
 }

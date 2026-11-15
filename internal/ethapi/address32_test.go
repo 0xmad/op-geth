@@ -35,22 +35,22 @@ import (
 )
 
 const (
-	wideWord   = "1111111111111111111111111111111111111111111111111111111111111111"
-	legacyWord = "2222222222222222222222222222222222222222"
-	// keccak256 of wideWord.
-	wideTrieKey = "b569321de72d0af89c2fb48a484de3fc9343f31600ae1f3e13d633cb48cbf816"
-	// keccak256 of legacyWord.
-	legacyTrieKey = "2ab0a4443bbea3fbe4d0e1503d11ff1367842fb0c8b28a5c8550f27599a40751"
+	address32Word = "1111111111111111111111111111111111111111111111111111111111111111"
+	address20Word = "2222222222222222222222222222222222222222"
+	// keccak256 of address32Word.
+	address32TrieKey = "b569321de72d0af89c2fb48a484de3fc9343f31600ae1f3e13d633cb48cbf816"
+	// keccak256 of address20Word.
+	address20TrieKey = "2ab0a4443bbea3fbe4d0e1503d11ff1367842fb0c8b28a5c8550f27599a40751"
 )
 
-func TestWideGenesisAccountRPC(t *testing.T) {
-	wide, err := common.NewAddress32(common.FromHex(wideWord))
+func TestAddress32GenesisAccountRPC(t *testing.T) {
+	address32, err := common.NewAddress32(common.FromHex(address32Word))
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	legacy := common.HexToAddress(legacyWord)
+	address20 := common.HexToAddress(address20Word)
 	code := []byte{0x60, 0x01}
 	slot := common.HexToHash("0x01")
 	ts := uint64(0)
@@ -59,10 +59,10 @@ func TestWideGenesisAccountRPC(t *testing.T) {
 	genesis := &core.Genesis{
 		Config: &cfg,
 		Alloc: types.GenesisAlloc{
-			legacy: {Balance: big.NewInt(7)},
+			address20: {Balance: big.NewInt(7)},
 		},
-		WideAlloc: map[common.Address32]types.Account{
-			wide: {
+		Address32Alloc: map[common.Address32]types.Account{
+			address32: {
 				Balance: big.NewInt(42),
 				Nonce:   4,
 				Code:    code,
@@ -87,10 +87,10 @@ func TestWideGenesisAccountRPC(t *testing.T) {
 	client := rpc.DialInProc(server)
 	defer client.Close()
 
-	wideHex := "0x" + wideWord
+	address32Hex := "0x" + address32Word
 	var balance hexutil.Big
 
-	if err := client.Call(&balance, "eth_getBalance", wideHex, "latest"); err != nil {
+	if err := client.Call(&balance, "eth_getBalance", address32Hex, "latest"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,7 +100,7 @@ func TestWideGenesisAccountRPC(t *testing.T) {
 
 	var nonce hexutil.Uint64
 
-	if err := client.Call(&nonce, "eth_getTransactionCount", wideHex, "latest"); err != nil {
+	if err := client.Call(&nonce, "eth_getTransactionCount", address32Hex, "latest"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,7 +110,7 @@ func TestWideGenesisAccountRPC(t *testing.T) {
 
 	var gotCode hexutil.Bytes
 
-	if err := client.Call(&gotCode, "eth_getCode", wideHex, "latest"); err != nil {
+	if err := client.Call(&gotCode, "eth_getCode", address32Hex, "latest"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,7 +120,7 @@ func TestWideGenesisAccountRPC(t *testing.T) {
 
 	var stored hexutil.Bytes
 
-	if err := client.Call(&stored, "eth_getStorageAt", wideHex, "0x01", "latest"); err != nil {
+	if err := client.Call(&stored, "eth_getStorageAt", address32Hex, "0x01", "latest"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,14 +130,14 @@ func TestWideGenesisAccountRPC(t *testing.T) {
 
 	var proof AccountResult
 
-	if err := client.Call(&proof, "eth_getProof", wideHex, []string{"0x01"}, "latest"); err != nil {
+	if err := client.Call(&proof, "eth_getProof", address32Hex, []string{"0x01"}, "latest"); err != nil {
 		t.Fatal(err)
 	}
 
 	got, ok := proof.Address.Address32()
 
-	if !ok || got != wide {
-		t.Fatalf("proof address = %s, want %s", got, wide)
+	if !ok || got != address32 {
+		t.Fatalf("proof address = %s, want %s", got, address32)
 	}
 
 	if proof.Balance.ToInt().Cmp(big.NewInt(42)) != 0 || proof.Nonce != 4 {
@@ -148,24 +148,24 @@ func TestWideGenesisAccountRPC(t *testing.T) {
 		t.Fatalf("storage proof = %+v", proof.StorageProof)
 	}
 
-	account := mustVerifyAccountProof(t, backend.chain.CurrentBlock().Root, common.HexToHash(wideTrieKey), proof.AccountProof)
+	account := mustVerifyAccountProof(t, backend.chain.CurrentBlock().Root, common.HexToHash(address32TrieKey), proof.AccountProof)
 
 	if account.Balance.Cmp(uint256.NewInt(42)) != 0 || account.Nonce != 4 {
 		t.Fatalf("proved account = %+v", account)
 	}
 
-	legacyHex := "0x" + legacyWord
-	var legacyBalance hexutil.Big
+	address20Hex := "0x" + address20Word
+	var address20Balance hexutil.Big
 
-	if err := client.Call(&legacyBalance, "eth_getBalance", legacyHex, "latest"); err != nil {
+	if err := client.Call(&address20Balance, "eth_getBalance", address20Hex, "latest"); err != nil {
 		t.Fatal(err)
 	}
 
-	if legacyBalance.ToInt().Cmp(big.NewInt(7)) != 0 {
-		t.Fatalf("legacy balance = %s, want 7", legacyBalance.ToInt())
+	if address20Balance.ToInt().Cmp(big.NewInt(7)) != 0 {
+		t.Fatalf("address20 balance = %s, want 7", address20Balance.ToInt())
 	}
 
-	padded := "0x000000000000000000000000" + legacyWord
+	padded := "0x000000000000000000000000" + address20Word
 	var paddedBalance hexutil.Big
 
 	if err := client.Call(&paddedBalance, "eth_getBalance", padded, "latest"); err != nil {
@@ -173,19 +173,19 @@ func TestWideGenesisAccountRPC(t *testing.T) {
 	}
 
 	if paddedBalance.ToInt().Cmp(big.NewInt(7)) != 0 {
-		t.Fatalf("padded word balance = %s, want the legacy balance 7", paddedBalance.ToInt())
+		t.Fatalf("padded word balance = %s, want the address20 balance 7", paddedBalance.ToInt())
 	}
 
-	var legacyProof AccountResult
+	var address20Proof AccountResult
 
-	if err := client.Call(&legacyProof, "eth_getProof", legacyHex, nil, "latest"); err != nil {
+	if err := client.Call(&address20Proof, "eth_getProof", address20Hex, nil, "latest"); err != nil {
 		t.Fatal(err)
 	}
 
-	legacyAccount := mustVerifyAccountProof(t, backend.chain.CurrentBlock().Root, common.HexToHash(legacyTrieKey), legacyProof.AccountProof)
+	address20Account := mustVerifyAccountProof(t, backend.chain.CurrentBlock().Root, common.HexToHash(address20TrieKey), address20Proof.AccountProof)
 
-	if legacyAccount.Balance.Cmp(uint256.NewInt(7)) != 0 {
-		t.Fatalf("proved legacy balance = %s, want 7", legacyAccount.Balance)
+	if address20Account.Balance.Cmp(uint256.NewInt(7)) != 0 {
+		t.Fatalf("proved address20 balance = %s, want 7", address20Account.Balance)
 	}
 }
 
