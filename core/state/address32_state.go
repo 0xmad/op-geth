@@ -21,6 +21,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/holiman/uint256"
 )
@@ -29,6 +30,7 @@ import (
 type address32Account struct {
 	data    types.StateAccount
 	origin  *types.StateAccount
+	code    []byte
 	created bool
 	dirty   bool
 }
@@ -36,6 +38,7 @@ type address32Account struct {
 func (w *address32Account) copy() *address32Account {
 	out := &address32Account{
 		data:    *w.data.Copy(),
+		code:    common.CopyBytes(w.code),
 		created: w.created,
 		dirty:   w.dirty,
 	}
@@ -161,6 +164,43 @@ func (s *StateDB) SetAddress32Nonce(addr common.Address32, nonce uint64) {
 	obj.dirty = true
 }
 
+// SetAddress32Code stores code on the address32.
+// The blob stays on the live account until commit writes it to disk.
+func (s *StateDB) SetAddress32Code(addr common.Address32, code []byte) {
+	obj := s.getOrNewAddress32Account(addr)
+	s.journal.append(address32CodeChange{
+		account:  addr,
+		prev:     common.CopyBytes(obj.code),
+		prevHash: common.CopyBytes(obj.data.CodeHash),
+	})
+	obj.code = common.CopyBytes(code)
+	obj.data.CodeHash = crypto.Keccak256Hash(code).Bytes()
+	obj.dirty = true
+}
+
+// address32CodeBlobs returns code written during this state.
+// Dirty is not required: an earlier root hash may already have cleared it.
+func (s *StateDB) address32CodeBlobs() []contractCode {
+	if len(s.address32Accounts) == 0 {
+		return nil
+	}
+
+	var codes []contractCode
+
+	for _, obj := range s.address32Accounts {
+		if obj == nil || len(obj.code) == 0 {
+			continue
+		}
+
+		codes = append(codes, contractCode{
+			hash: crypto.Keccak256Hash(obj.code),
+			blob: common.CopyBytes(obj.code),
+		})
+	}
+
+	return codes
+}
+
 // commitAddress32Accounts writes dirty Address32 accounts into the account trie.
 func (s *StateDB) commitAddress32Accounts() {
 	if len(s.address32Accounts) == 0 || s.trie == nil {
@@ -269,4 +309,32 @@ func (ch address32NonceChange) dirtied() *common.Address { return nil }
 
 func (ch address32NonceChange) copy() journalEntry {
 	return address32NonceChange{account: ch.account, prev: ch.prev}
+}
+
+type address32CodeChange struct {
+	account  common.Address32
+	prev     []byte
+	prevHash []byte
+}
+
+func (ch address32CodeChange) revert(s *StateDB) {
+	obj := s.liveAddress32(ch.account)
+
+	if obj == nil {
+		return
+	}
+
+	obj.code = common.CopyBytes(ch.prev)
+	obj.data.CodeHash = common.CopyBytes(ch.prevHash)
+	obj.dirty = true
+}
+
+func (ch address32CodeChange) dirtied() *common.Address { return nil }
+
+func (ch address32CodeChange) copy() journalEntry {
+	return address32CodeChange{
+		account:  ch.account,
+		prev:     common.CopyBytes(ch.prev),
+		prevHash: common.CopyBytes(ch.prevHash),
+	}
 }

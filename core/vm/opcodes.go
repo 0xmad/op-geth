@@ -219,6 +219,8 @@ const (
 	EXTCODECOPY32 OpCode = 0xa7
 	EXTCODEHASH32 OpCode = 0xa8
 	CALL32        OpCode = 0xa9
+	CREATE32      OpCode = 0xac
+	CREATE232     OpCode = 0xad
 )
 
 // 0xd0 range - eof operations.
@@ -430,6 +432,8 @@ var opCodeToString = [256]string{
 	EXTCODECOPY32: "EXTCODECOPY32",
 	EXTCODEHASH32: "EXTCODEHASH32",
 	CALL32:        "CALL32",
+	CREATE32:      "CREATE32",
+	CREATE232:     "CREATE232",
 
 	// 0xd range - eof ops.
 	DATALOAD:  "DATALOAD",
@@ -624,6 +628,8 @@ var stringToOp = map[string]OpCode{
 	"EXTCODECOPY32":   EXTCODECOPY32,
 	"EXTCODEHASH32":   EXTCODEHASH32,
 	"CALL32":          CALL32,
+	"CREATE32":        CREATE32,
+	"CREATE232":       CREATE232,
 	"DATALOAD":        DATALOAD,
 	"DATALOADN":       DATALOADN,
 	"DATASIZE":        DATASIZE,

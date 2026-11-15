@@ -119,6 +119,20 @@ func (a StateAddress) Address32() (Address32, bool) {
 	return addr, true
 }
 
+// Use calls address20 or address32 with the account this holds.
+func (a StateAddress) Use(address20 func(Address), address32 func(Address32)) {
+	switch a.kind {
+	case StateAddress20:
+		var addr Address
+		copy(addr[:], a.data[:AddressLength])
+		address20(addr)
+	case StateAddress32:
+		var addr Address32
+		copy(addr[:], a.data[:])
+		address32(addr)
+	}
+}
+
 // Preimage returns the bytes hashed into the account trie key.
 func (a StateAddress) Preimage() ([]byte, error) {
 	switch a.kind {

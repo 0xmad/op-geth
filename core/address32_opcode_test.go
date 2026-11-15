@@ -43,6 +43,10 @@ func TestAddress32OpcodeBytes(t *testing.T) {
 	if vm.BALANCE32 != 0xa5 || vm.EXTCODESIZE32 != 0xa6 || vm.EXTCODECOPY32 != 0xa7 || vm.EXTCODEHASH32 != 0xa8 || vm.CALL32 != 0xa9 {
 		t.Fatalf("opcodes = %#x %#x %#x %#x %#x", vm.BALANCE32, vm.EXTCODESIZE32, vm.EXTCODECOPY32, vm.EXTCODEHASH32, vm.CALL32)
 	}
+
+	if vm.CREATE32 != 0xac || vm.CREATE232 != 0xad {
+		t.Fatalf("create opcodes = %#x %#x", vm.CREATE32, vm.CREATE232)
+	}
 }
 
 func TestAddress20ContractReadsAddress32(t *testing.T) {
@@ -663,4 +667,81 @@ func callReturning(op vm.OpCode, word []byte, value uint64) []byte {
 	code = append(code, push32Uint(500_000)...)
 	code = append(code, byte(op), byte(vm.PUSH1), 0, byte(vm.MSTORE), byte(vm.PUSH1), 64, byte(vm.PUSH1), 0, byte(vm.RETURN))
 	return code
+}
+
+func TestCreate32FromAddress20CreatorPushesZero(t *testing.T) {
+	cfg := address32Config()
+
+	for _, op := range []vm.OpCode{vm.CREATE32, vm.CREATE232} {
+		t.Run(op.String(), func(t *testing.T) {
+			run := runOpcode(t, cfg, address20CreateReturning(op), nil, nil)
+
+			if run.err != nil {
+				t.Fatal(run.err)
+			}
+
+			if wordResult(t, run.ret).Sign() != 0 {
+				t.Fatalf("result = %s, want 0", wordResult(t, run.ret))
+			}
+
+			if run.statedb.GetNonce(opcodeContract) != 0 {
+				t.Fatalf("creator nonce = %d, want 0", run.statedb.GetNonce(opcodeContract))
+			}
+
+			// Three PUSH1s cost 9. The word store and return cost 15.
+			// CREATE232 also pushes a salt, which costs 3.
+			// The child stipend is not spent. The fixed CREATE gas is.
+			want := params.CreateGas + 24
+
+			if op == vm.CREATE232 {
+				want = params.Create2Gas + 27
+			}
+
+			if run.gas != want {
+				t.Fatalf("gas = %d, want %d", run.gas, want)
+			}
+		})
+	}
+}
+
+func TestCreate32InitcodeLimitMatchesCreate(t *testing.T) {
+	size := byte(0)
+	// 49153 does not fit in one byte. Push it as a 3-byte value.
+	tooBig := uint64(params.MaxInitCodeSize + 1)
+	code := append(push32Uint(tooBig), byte(vm.PUSH1), size, byte(vm.PUSH1), size, byte(vm.CREATE32))
+	mirrored := append(push32Uint(tooBig), byte(vm.PUSH1), size, byte(vm.PUSH1), size, byte(vm.CREATE))
+	cfg := address32Config()
+	address32Run := runOpcode(t, cfg, code, nil, nil)
+	address20Run := runOpcode(t, cfg, mirrored, nil, nil)
+
+	if address32Run.err == nil || address20Run.err == nil {
+		t.Fatalf("create32 err = %v, create err = %v", address32Run.err, address20Run.err)
+	}
+
+	if address32Run.err.Error() != address20Run.err.Error() {
+		t.Fatalf("create32 err = %v, create err = %v", address32Run.err, address20Run.err)
+	}
+}
+
+// address20CreateReturning is a create with empty initcode that returns the result word.
+// Three PUSH1s cost 9, the return sequence costs 15, and one word of memory costs 3.
+func address20CreateReturning(op vm.OpCode) []byte {
+	code := []byte{
+		byte(vm.PUSH1), 0,
+		byte(vm.PUSH1), 0,
+		byte(vm.PUSH1), 0,
+	}
+
+	if op == vm.CREATE232 {
+		code = append(push32(make([]byte, 32)), code...)
+	}
+
+	return append(code,
+		byte(op),
+		byte(vm.PUSH1), 0,
+		byte(vm.MSTORE),
+		byte(vm.PUSH1), 32,
+		byte(vm.PUSH1), 0,
+		byte(vm.RETURN),
+	)
 }

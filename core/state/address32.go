@@ -130,6 +130,10 @@ func (s *StateDB) Address32Nonce(addr common.Address32) uint64 {
 
 // Address32Code returns the address32 code, or nil when it is absent or empty.
 func (s *StateDB) Address32Code(addr common.Address32) []byte {
+	if obj := s.liveAddress32(addr); obj != nil && obj.code != nil {
+		return common.CopyBytes(obj.code)
+	}
+
 	acc := s.address32Account(addr)
 
 	if acc == nil || len(acc.CodeHash) == 0 || bytes.Equal(acc.CodeHash, types.EmptyCodeHash.Bytes()) {
