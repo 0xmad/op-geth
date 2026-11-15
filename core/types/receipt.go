@@ -341,7 +341,7 @@ func (r *Receipt) decodeTyped(b []byte) error {
 		return errShortTypedReceipt
 	}
 	switch b[0] {
-	case DynamicFeeTxType, AccessListTxType, BlobTxType, SetCodeTxType:
+	case DynamicFeeTxType, AccessListTxType, BlobTxType, SetCodeTxType, Address32TxType:
 		var data receiptRLP
 		err := rlp.DecodeBytes(b[1:], &data)
 		if err != nil {
@@ -438,7 +438,7 @@ func (r *Receipt) DeriveFields(signer Signer, context DeriveReceiptContext) {
 	r.TransactionIndex = context.TxIndex
 
 	// The contract address can be derived from the transaction itself
-	if context.Tx.To() == nil {
+	if context.Tx.CreatesContract() {
 		// Deriving the signer is expensive, only do if it's actually needed
 		from, _ := Sender(signer, context.Tx)
 		nonce := context.Tx.Nonce()
@@ -574,7 +574,7 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 	}
 	w.WriteByte(r.Type)
 	switch r.Type {
-	case AccessListTxType, DynamicFeeTxType, BlobTxType, SetCodeTxType:
+	case AccessListTxType, DynamicFeeTxType, BlobTxType, SetCodeTxType, Address32TxType:
 		rlp.Encode(w, data)
 	case DepositTxType:
 		if r.DepositReceiptVersion != nil {

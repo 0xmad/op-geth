@@ -58,6 +58,9 @@ func MakeSigner(config *params.ChainConfig, blockNumber *big.Int, blockTime uint
 	default:
 		signer = FrontierSigner{}
 	}
+	if config.IsAddress32(blockTime) {
+		signer = withAddress32(signer)
+	}
 	return signer
 }
 
@@ -86,6 +89,9 @@ func LatestSigner(config *params.ChainConfig) Signer {
 			signer = NewEIP155Signer(config.ChainID)
 		default:
 			signer = HomesteadSigner{}
+		}
+		if config.Address32Time != nil {
+			signer = withAddress32(signer)
 		}
 	} else {
 		signer = HomesteadSigner{}
@@ -158,6 +164,106 @@ func Sender(signer Signer, tx *Transaction) (common.Address, error) {
 	}
 	tx.from.Store(&sigCache{signer: signer, from: addr})
 	return addr, nil
+}
+
+// SenderAccount returns the account that signed tx.
+// A type 0x05 transaction spends the legacy account when its sender kind is 0
+// and the Address32 when its sender kind is 1. A wide sender whose word has
+// 12 leading zero bytes is invalid. Every other transaction type returns the
+// legacy sender.
+func SenderAccount(signer Signer, tx *Transaction) (common.StateAddress, error) {
+	if tx.Type() != Address32TxType {
+		addr, err := Sender(signer, tx)
+
+		if err != nil {
+			return common.StateAddress{}, err
+		}
+
+		return common.LegacyStateAddress(addr), nil
+	}
+
+	ms, ok := signer.(*modernSigner)
+
+	if !ok || !ms.supportsType(Address32TxType) {
+		return common.StateAddress{}, ErrTxTypeNotSupported
+	}
+
+	if tx.ChainId().Cmp(ms.chainID) != 0 {
+		return common.StateAddress{}, fmt.Errorf("%w: have %d want %d", ErrInvalidChainId, tx.ChainId(), ms.chainID)
+	}
+
+	inner, ok := tx.inner.(*Address32Tx)
+
+	if !ok {
+		return common.StateAddress{}, ErrTxTypeNotSupported
+	}
+
+	if inner.SenderKind != SenderKindLegacy && inner.SenderKind != SenderKindWide {
+		return common.StateAddress{}, ErrInvalidSenderKind
+	}
+
+	V, R, S := tx.RawSignatureValues()
+	V = new(big.Int).Add(V, big.NewInt(27))
+	pub, err := recoverPublicKey(ms.Hash(tx), R, S, V, true)
+
+	if err != nil {
+		return common.StateAddress{}, err
+	}
+
+	key, err := crypto.UnmarshalPubkey(pub)
+
+	if err != nil {
+		return common.StateAddress{}, err
+	}
+
+	if inner.SenderKind == SenderKindLegacy {
+		return common.LegacyStateAddress(crypto.PubkeyToAddress(*key)), nil
+	}
+
+	wideWord := crypto.Keccak256(append([]byte{0x01}, pub[1:]...))
+
+	return address32Sender(wideWord)
+}
+
+// address32Sender names the wide account in word.
+// A word with 12 leading zero bytes is the legacy subspace and is rejected.
+func address32Sender(word []byte) (common.StateAddress, error) {
+	addr, err := common.NewAddress32(word)
+
+	if err != nil {
+		return common.StateAddress{}, err
+	}
+
+	return common.WideStateAddress(addr), nil
+}
+
+func recoverPublicKey(sighash common.Hash, R, S, Vb *big.Int, homestead bool) ([]byte, error) {
+	if Vb.BitLen() > 8 {
+		return nil, ErrInvalidSig
+	}
+
+	V := byte(Vb.Uint64() - 27)
+
+	if !crypto.ValidateSignatureValues(V, R, S, homestead) {
+		return nil, ErrInvalidSig
+	}
+
+	r, s := R.Bytes(), S.Bytes()
+	sig := make([]byte, crypto.SignatureLength)
+	copy(sig[32-len(r):32], r)
+	copy(sig[64-len(s):64], s)
+	sig[64] = V
+	pub, err := crypto.Ecrecover(sighash[:], sig)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(pub) == 0 || pub[0] != 4 {
+		return nil, errors.New("invalid public key")
+	}
+
+	return pub, nil
 }
 
 // Signer encapsulates transaction signature handling. The name of this type is slightly
@@ -242,6 +348,14 @@ func newModernSigner(chainID *big.Int, fork forks.Fork) Signer {
 	return s
 }
 
+func withAddress32(signer Signer) Signer {
+	if ms, ok := signer.(*modernSigner); ok {
+		ms.txtypes.set(Address32TxType)
+	}
+
+	return signer
+}
+
 func (s *modernSigner) ChainID() *big.Int {
 	return s.chainID
 }
@@ -280,6 +394,21 @@ func (s *modernSigner) Sender(tx *Transaction) (common.Address, error) {
 	}
 	if tx.ChainId().Cmp(s.chainID) != 0 {
 		return common.Address{}, fmt.Errorf("%w: have %d want %d", ErrInvalidChainId, tx.ChainId(), s.chainID)
+	}
+	if tt == Address32TxType {
+		account, err := SenderAccount(s, tx)
+
+		if err != nil {
+			return common.Address{}, err
+		}
+
+		legacy, ok := account.Legacy()
+
+		if !ok {
+			return common.Address{}, errors.New("wide sender has no 20-byte address")
+		}
+
+		return legacy, nil
 	}
 	// 'modern' txs are defined to use 0 and 1 as their recovery
 	// id, add 27 to become equivalent to unprotected Homestead signatures.
@@ -503,26 +632,9 @@ func decodeSignature(sig []byte) (r, s, v *big.Int) {
 }
 
 func recoverPlain(sighash common.Hash, R, S, Vb *big.Int, homestead bool) (common.Address, error) {
-	if Vb.BitLen() > 8 {
-		return common.Address{}, ErrInvalidSig
-	}
-	V := byte(Vb.Uint64() - 27)
-	if !crypto.ValidateSignatureValues(V, R, S, homestead) {
-		return common.Address{}, ErrInvalidSig
-	}
-	// encode the signature in uncompressed format
-	r, s := R.Bytes(), S.Bytes()
-	sig := make([]byte, crypto.SignatureLength)
-	copy(sig[32-len(r):32], r)
-	copy(sig[64-len(s):64], s)
-	sig[64] = V
-	// recover the public key from the signature
-	pub, err := crypto.Ecrecover(sighash[:], sig)
+	pub, err := recoverPublicKey(sighash, R, S, Vb, homestead)
 	if err != nil {
 		return common.Address{}, err
-	}
-	if len(pub) == 0 || pub[0] != 4 {
-		return common.Address{}, errors.New("invalid public key")
 	}
 	var addr common.Address
 	copy(addr[:], crypto.Keccak256(pub[1:])[12:])

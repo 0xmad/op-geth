@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -70,6 +71,13 @@ type TransactionArgs struct {
 
 	// For SetCodeTxType
 	AuthorizationList []types.SetCodeAuthorization `json:"authorizationList"`
+
+	// SenderKind selects the account that pays for a type 0x05 call.
+	SenderKind      *hexutil.Uint64 `json:"senderKind,omitempty"`
+	fromAccount     *common.StateAddress
+	toAccount       *common.StateAddress
+	address32Access types.Address32AccessList
+	wideAccess      bool
 }
 
 // from retrieves the transaction sender address.
@@ -492,6 +500,223 @@ func (args *TransactionArgs) ToMessage(baseFee *big.Int, skipNonceCheck bool) *c
 		SetCodeAuthorizations: args.AuthorizationList,
 		SkipNonceChecks:       skipNonceCheck,
 		SkipTransactionChecks: true,
+		Address32:             args.address32Call(),
+	}
+}
+
+// UnmarshalJSON accepts a 20-byte or 32-byte from and to.
+func (args *TransactionArgs) UnmarshalJSON(input []byte) error {
+	var raw map[string]json.RawMessage
+
+	if err := json.Unmarshal(input, &raw); err != nil {
+		return err
+	}
+
+	fromRaw, toRaw, accessRaw := raw["from"], raw["to"], raw["accessList"]
+	delete(raw, "from")
+	delete(raw, "to")
+	delete(raw, "accessList")
+	stripped, err := json.Marshal(raw)
+
+	if err != nil {
+		return err
+	}
+
+	type plain TransactionArgs
+	var dec plain
+
+	if err := json.Unmarshal(stripped, &dec); err != nil {
+		return err
+	}
+
+	*args = TransactionArgs(dec)
+
+	if err := args.setFlexibleAddress(fromRaw, true); err != nil {
+		return fmt.Errorf("invalid from: %w", err)
+	}
+
+	if err := args.setFlexibleAddress(toRaw, false); err != nil {
+		return fmt.Errorf("invalid to: %w", err)
+	}
+
+	if err := args.setAccessList(accessRaw); err != nil {
+		return fmt.Errorf("invalid accessList: %w", err)
+	}
+
+	return args.checkSenderKind()
+}
+
+func (args *TransactionArgs) setFlexibleAddress(raw json.RawMessage, from bool) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+
+	var text string
+
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return err
+	}
+
+	word, err := hexutil.Decode(text)
+
+	if err != nil {
+		return err
+	}
+
+	switch len(word) {
+	case 20:
+		addr := common.BytesToAddress(word)
+
+		if from {
+			args.From = &addr
+		} else {
+			args.To = &addr
+		}
+	case 32:
+		account, err := common.StateAddressFromWord(word)
+
+		if err != nil {
+			return err
+		}
+
+		if from {
+			args.fromAccount = &account
+		} else {
+			args.toAccount = &account
+		}
+
+		if legacy, ok := account.Legacy(); ok {
+			if from {
+				args.From = &legacy
+			} else {
+				args.To = &legacy
+			}
+		}
+	default:
+		return fmt.Errorf("address must be 20 or 32 bytes")
+	}
+	return nil
+}
+
+func (args *TransactionArgs) checkSenderKind() error {
+	if args.SenderKind == nil {
+		return nil
+	}
+
+	kind := uint64(*args.SenderKind)
+
+	if kind != types.SenderKindLegacy && kind != types.SenderKindWide {
+		return types.ErrInvalidSenderKind
+	}
+
+	wide := args.fromAccount != nil && args.fromAccount.Kind() == common.StateAddress32
+
+	if kind == types.SenderKindWide && !wide && (args.From != nil || args.fromAccount != nil) {
+		return fmt.Errorf("sender kind 1 requires a wide from")
+	}
+
+	if kind == types.SenderKindLegacy && wide {
+		return fmt.Errorf("sender kind 0 requires a legacy from")
+	}
+
+	return nil
+}
+
+func (args *TransactionArgs) setAccessList(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+
+	var entries []struct {
+		Address     string        `json:"address"`
+		StorageKeys []common.Hash `json:"storageKeys"`
+	}
+
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return err
+	}
+
+	legacy := make(types.AccessList, 0, len(entries))
+	wide := make(types.Address32AccessList, 0, len(entries))
+
+	for _, entry := range entries {
+		word, err := hexutil.Decode(entry.Address)
+
+		if err != nil {
+			return err
+		}
+
+		var full types.Address32Word
+
+		switch len(word) {
+		case 20:
+			copy(full[12:], word)
+			legacy = append(legacy, types.AccessTuple{Address: common.BytesToAddress(word), StorageKeys: entry.StorageKeys})
+		case 32:
+			account, err := common.StateAddressFromWord(word)
+
+			if err != nil {
+				return err
+			}
+
+			copy(full[:], word)
+
+			if addr, ok := account.Legacy(); ok {
+				legacy = append(legacy, types.AccessTuple{Address: addr, StorageKeys: entry.StorageKeys})
+			} else {
+				args.wideAccess = true
+			}
+		default:
+			return fmt.Errorf("access list address must be 20 or 32 bytes")
+		}
+
+		wide = append(wide, types.Address32AccessTuple{Address: full, StorageKeys: entry.StorageKeys})
+	}
+
+	if !args.wideAccess {
+		args.AccessList = &legacy
+	}
+
+	args.address32Access = wide
+
+	return nil
+}
+
+func (args *TransactionArgs) address32Call() *core.Address32Call {
+	if args.SenderKind == nil && args.fromAccount == nil && args.toAccount == nil && !args.wideAccess {
+		return nil
+	}
+
+	var from common.StateAddress
+	switch {
+	case args.fromAccount != nil:
+		from = *args.fromAccount
+	case args.From != nil:
+		from = common.LegacyStateAddress(*args.From)
+	}
+	var to *common.StateAddress
+	switch {
+	case args.toAccount != nil:
+		recipient := *args.toAccount
+		to = &recipient
+	case args.To != nil:
+		recipient := common.LegacyStateAddress(*args.To)
+		to = &recipient
+	}
+
+	kind := byte(types.SenderKindLegacy)
+
+	if args.SenderKind != nil {
+		kind = byte(*args.SenderKind)
+	} else if from.Kind() == common.StateAddress32 {
+		kind = types.SenderKindWide
+	}
+
+	return &core.Address32Call{
+		SenderKind: kind,
+		From:       from,
+		To:         to,
+		AccessList: args.address32Access,
 	}
 }
 

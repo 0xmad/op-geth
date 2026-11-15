@@ -41,8 +41,61 @@ type StateAddress struct {
 	data [Address32Length]byte
 }
 
+// LegacyStateAddress names a 20-byte account.
+func LegacyStateAddress(addr Address) StateAddress {
+	var out StateAddress
+	out.kind = StateAddressLegacy
+	copy(out.data[:], addr[:])
+	return out
+}
+
+// WideStateAddress names an Address32.
+func WideStateAddress(addr Address32) StateAddress {
+	var out StateAddress
+	out.kind = StateAddress32
+	copy(out.data[:], addr[:])
+	return out
+}
+
+// StateAddressFromWord names the account in a 32-byte word.
+// Twelve leading zero bytes select the legacy account in the low 20 bytes.
+func StateAddressFromWord(word []byte) (StateAddress, error) {
+	if len(word) != Address32Length {
+		return StateAddress{}, fmt.Errorf("state address word must be 32 bytes, have %d", len(word))
+	}
+
+	if legacy, ok := LegacyAddressOf(word); ok {
+		return LegacyStateAddress(legacy), nil
+	}
+
+	wide, err := NewAddress32(word)
+
+	if err != nil {
+		return StateAddress{}, err
+	}
+
+	return WideStateAddress(wide), nil
+}
+
 // Kind reports which account form this holds.
 func (a StateAddress) Kind() StateAddressKind { return a.kind }
+
+// Word32 returns the 32-byte transaction word for this account.
+// A legacy account is the 20-byte address with 12 leading zero bytes.
+func (a StateAddress) Word32() ([]byte, error) {
+	switch a.kind {
+	case StateAddressLegacy:
+		out := make([]byte, Address32Length)
+		copy(out[Address32Length-AddressLength:], a.data[:AddressLength])
+		return out, nil
+	case StateAddress32:
+		out := make([]byte, Address32Length)
+		copy(out, a.data[:])
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unknown state address kind %d", a.kind)
+	}
+}
 
 // Legacy returns the 20-byte account. ok is false for any other kind.
 func (a StateAddress) Legacy() (Address, bool) {

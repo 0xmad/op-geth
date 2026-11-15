@@ -44,8 +44,17 @@ func (s *StateDB) AddLegacyAccessPreimage(preimage []byte) error {
 }
 
 // Address32 loads the wide account stored under keccak256 of its 32-byte word.
+// A pending write in this state is returned ahead of the committed trie.
 // A missing account returns a nil account and a nil error.
 func (s *StateDB) Address32(addr common.Address32) (*types.StateAccount, error) {
+	if obj := s.liveWide(addr); obj != nil {
+		return obj.data.Copy(), nil
+	}
+
+	return s.address32FromTrie(addr)
+}
+
+func (s *StateDB) address32FromTrie(addr common.Address32) (*types.StateAccount, error) {
 	tr, err := s.db.OpenTrie(s.originalRoot)
 
 	if err != nil {

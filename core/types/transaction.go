@@ -51,6 +51,8 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	SetCodeTxType    = 0x04
+	// Address32TxType moves value between legacy and wide accounts.
+	Address32TxType = 0x05
 )
 
 // Transaction is an Ethereum transaction.
@@ -223,6 +225,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(BlobTx)
 	case SetCodeTxType:
 		inner = new(SetCodeTx)
+	case Address32TxType:
+		inner = new(Address32Tx)
 	case DepositTxType:
 		inner = new(DepositTx)
 	default:
@@ -338,8 +342,26 @@ func (tx *Transaction) EffectiveNonce() *uint64 {
 
 // To returns the recipient address of the transaction.
 // For contract-creation transactions, To returns nil.
+// A type 0x05 transaction returns the legacy account when the 32-byte
+// recipient has 12 leading zero bytes, and nil for a wide recipient.
 func (tx *Transaction) To() *common.Address {
 	return copyAddressPtr(tx.inner.to())
+}
+
+// CreatesContract reports whether the transaction deploys a contract.
+// A type 0x05 wide recipient is not a creation.
+func (tx *Transaction) CreatesContract() bool {
+	if inner, ok := tx.inner.(*Address32Tx); ok {
+		return inner.To == nil
+	}
+
+	return tx.inner.to() == nil
+}
+
+// Address32Tx returns the type 0x05 payload, or nil for every other type.
+func (tx *Transaction) Address32Tx() *Address32Tx {
+	inner, _ := tx.inner.(*Address32Tx)
+	return inner
 }
 
 // SourceHash returns the hash that uniquely identifies the source of the deposit tx,

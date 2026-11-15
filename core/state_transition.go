@@ -116,6 +116,19 @@ func IntrinsicGas(data []byte, accessList types.AccessList, authList []types.Set
 	return gas, nil
 }
 
+// IntrinsicGasAddress32 is the intrinsic gas of a type 0x05 transaction.
+// Calldata and access-list costs match type 0x02. Each 32-byte access-list
+// address costs the same as one type 0x02 address.
+func IntrinsicGasAddress32(data []byte, list types.Address32AccessList, contractCreation, isShanghai bool) (uint64, error) {
+	accessList := make(types.AccessList, len(list))
+
+	for i, tuple := range list {
+		accessList[i].StorageKeys = tuple.StorageKeys
+	}
+
+	return IntrinsicGas(data, accessList, nil, contractCreation, true, true, isShanghai)
+}
+
 // FloorDataGas computes the minimum gas required for a transaction based on its data tokens (EIP-7623).
 func FloorDataGas(data []byte) (uint64, error) {
 	var (
@@ -175,10 +188,30 @@ type Message struct {
 	IsDepositTx    bool                 // IsDepositTx indicates the message is force-included and can persist a mint.
 	Mint           *big.Int             // Mint is the amount to mint before EVM processing, or nil if there is no minting.
 	RollupCostData types.RollupCostData // RollupCostData caches data to compute the fee we charge for data availability
+
+	// Address32 is set for a type 0x05 value transfer. From and To still name
+	// a legacy party when that party is a 20-byte account.
+	Address32 *Address32Call
+}
+
+// Address32Call is the sender, recipient, and access list of a type 0x05 transaction.
+type Address32Call struct {
+	// SenderKind selects the account that pays. Kind 0 is legacy and kind 1 is wide.
+	SenderKind byte
+	// From is the account that pays for the call.
+	From common.StateAddress
+	// To is the recipient. A nil To means contract creation.
+	To *common.StateAddress
+	// AccessList is the 32-byte access list, priced like a type 0x02 access list.
+	AccessList types.Address32AccessList
 }
 
 // TransactionToMessage converts a transaction into a Message.
 func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.Int) (*Message, error) {
+	if tx.Type() == types.Address32TxType {
+		return address32TransactionToMessage(tx, s, baseFee)
+	}
+
 	msg := &Message{
 		Nonce:                 tx.Nonce(),
 		GasLimit:              tx.Gas(),
@@ -220,6 +253,10 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 // indicates a core error meaning that the message would always fail for that particular
 // state and would never be accepted within a block.
 func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
+	if msg.Address32 != nil {
+		return applyAddress32Message(evm, msg, gp)
+	}
+
 	evm.SetTxContext(NewEVMTxContext(msg))
 	return newStateTransition(evm, msg, gp).execute()
 }
