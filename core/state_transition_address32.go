@@ -170,7 +170,13 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 		}
 	}
 
-	if len(recipient.code()) > 0 {
+	// Code in the other namespace is not executed. The transaction is included,
+	// the nonce is spent, and fees are paid. The callee is left as it was.
+	// A 7702 delegation is code. A codeless target still receives the value.
+	code := recipient.code()
+	crossNamespaceRevert := len(code) > 0 && call.From.Kind() != call.To.Kind()
+
+	if len(code) > 0 && !crossNamespaceRevert {
 		return nil, fmt.Errorf("address32 target %s has code", recipient.label())
 	}
 
@@ -212,17 +218,19 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 
 	sender.setNonce(sender.nonce() + 1)
 
-	value, overflow := uint256.FromBig(msg.Value)
+	if !crossNamespaceRevert {
+		value, overflow := uint256.FromBig(msg.Value)
 
-	if overflow {
-		return nil, fmt.Errorf("%w: address %s", ErrInsufficientFundsForTransfer, sender.label())
+		if overflow {
+			return nil, fmt.Errorf("%w: address %s", ErrInsufficientFundsForTransfer, sender.label())
+		}
+
+		if err := sender.sub(value.ToBig(), tracing.BalanceChangeTransfer); err != nil {
+			return nil, err
+		}
+
+		recipient.add(value, tracing.BalanceChangeTransfer)
 	}
-
-	if err := sender.sub(value.ToBig(), tracing.BalanceChangeTransfer); err != nil {
-		return nil, err
-	}
-
-	recipient.add(value, tracing.BalanceChangeTransfer)
 
 	gasUsed := floor
 
@@ -259,7 +267,13 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 		return nil, err
 	}
 
-	return &ExecutionResult{UsedGas: gasUsed, MaxUsedGas: gasUsed}, nil
+	result := &ExecutionResult{UsedGas: gasUsed, MaxUsedGas: gasUsed}
+
+	if crossNamespaceRevert {
+		result.Err = vm.ErrExecutionReverted
+	}
+
+	return result, nil
 }
 
 func payAddress32Fees(evm *vm.EVM, statedb *state.StateDB, msg *Message, rules params.Rules, gasUsed uint64, l1Cost *big.Int) error {
