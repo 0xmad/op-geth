@@ -76,6 +76,7 @@ var (
 		utils.OverrideOptimismIsthmus,
 		utils.OverrideOptimismJovian,
 		utils.OverrideOptimismKarst,
+		utils.OverrideOptimismAddress32,
 		utils.OverrideOptimismInterop,
 		utils.EnablePersonal, // deprecated
 		utils.TxPoolLocalsFlag,

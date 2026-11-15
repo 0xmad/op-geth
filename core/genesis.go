@@ -296,16 +296,17 @@ type ChainOverrides struct {
 	OverrideVerkle *uint64
 
 	// OP-Stack additions
-	OverrideOptimismCanyon   *uint64
-	OverrideOptimismEcotone  *uint64
-	OverrideOptimismFjord    *uint64
-	OverrideOptimismGranite  *uint64
-	OverrideOptimismHolocene *uint64
-	OverrideOptimismIsthmus  *uint64
-	OverrideOptimismJovian   *uint64
-	OverrideOptimismKarst    *uint64
-	OverrideOptimismInterop  *uint64
-	ApplySuperchainUpgrades  bool
+	OverrideOptimismCanyon    *uint64
+	OverrideOptimismEcotone   *uint64
+	OverrideOptimismFjord     *uint64
+	OverrideOptimismGranite   *uint64
+	OverrideOptimismHolocene  *uint64
+	OverrideOptimismIsthmus   *uint64
+	OverrideOptimismJovian    *uint64
+	OverrideOptimismKarst     *uint64
+	OverrideOptimismAddress32 *uint64
+	OverrideOptimismInterop   *uint64
+	ApplySuperchainUpgrades   bool
 }
 
 // apply applies the chain overrides on the supplied chain config.
@@ -384,6 +385,9 @@ func (o *ChainOverrides) apply(cfg *params.ChainConfig) error {
 	}
 	if o.OverrideOptimismKarst != nil {
 		cfg.KarstTime = o.OverrideOptimismKarst
+	}
+	if o.OverrideOptimismAddress32 != nil {
+		cfg.Address32Time = o.OverrideOptimismAddress32
 	}
 	if o.OverrideOptimismInterop != nil {
 		cfg.InteropTime = o.OverrideOptimismInterop
