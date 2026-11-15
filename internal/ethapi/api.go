@@ -323,16 +323,23 @@ func (api *BlockChainAPI) BlockNumber() hexutil.Uint64 {
 	return hexutil.Uint64(header.Number.Uint64())
 }
 
+// historicalAccount reports whether this account read belongs to the
+// pre-bedrock historical backend. An Address32 exists only in local state.
+func historicalAccount(cfg *params.ChainConfig, number *big.Int, address common.StateAddress) bool {
+	_, ok := address.Legacy()
+	return ok && cfg.IsOptimismPreBedrock(number)
+}
+
 // GetBalance returns the amount of wei for the given address in the state of the
 // given block number. The rpc.LatestBlockNumber and rpc.PendingBlockNumber meta
 // block numbers are also allowed.
-func (api *BlockChainAPI) GetBalance(ctx context.Context, address common.Address, blockNrOrHash rpc.BlockNumberOrHash) (*hexutil.Big, error) {
+func (api *BlockChainAPI) GetBalance(ctx context.Context, address common.StateAddress, blockNrOrHash rpc.BlockNumberOrHash) (*hexutil.Big, error) {
 	header, err := headerByNumberOrHash(ctx, api.b, blockNrOrHash)
 	if err != nil {
 		return nil, err
 	}
 
-	if api.b.ChainConfig().IsOptimismPreBedrock(header.Number) {
+	if historicalAccount(api.b.ChainConfig(), header.Number, address) {
 		if api.b.HistoricalRPCService() != nil {
 			var res hexutil.Big
 			err := api.b.HistoricalRPCService().CallContext(ctx, &res, "eth_getBalance", address, blockNrOrHash)
@@ -349,19 +356,19 @@ func (api *BlockChainAPI) GetBalance(ctx context.Context, address common.Address
 	if state == nil || err != nil {
 		return nil, err
 	}
-	b := state.GetBalance(address).ToBig()
+	b := state.AccountBalance(address).ToBig()
 	return (*hexutil.Big)(b), state.Error()
 }
 
 // AccountResult structs for GetProof
 type AccountResult struct {
-	Address      common.Address  `json:"address"`
-	AccountProof []string        `json:"accountProof"`
-	Balance      *hexutil.Big    `json:"balance"`
-	CodeHash     common.Hash     `json:"codeHash"`
-	Nonce        hexutil.Uint64  `json:"nonce"`
-	StorageHash  common.Hash     `json:"storageHash"`
-	StorageProof []StorageResult `json:"storageProof"`
+	Address      common.StateAddress `json:"address"`
+	AccountProof []string            `json:"accountProof"`
+	Balance      *hexutil.Big        `json:"balance"`
+	CodeHash     common.Hash         `json:"codeHash"`
+	Nonce        hexutil.Uint64      `json:"nonce"`
+	StorageHash  common.Hash         `json:"storageHash"`
+	StorageProof []StorageResult     `json:"storageProof"`
 }
 
 type StorageResult struct {
@@ -384,12 +391,12 @@ func (n *proofList) Delete(key []byte) error {
 }
 
 // GetProof returns the Merkle-proof for a given account and optionally some storage keys.
-func (api *BlockChainAPI) GetProof(ctx context.Context, address common.Address, storageKeys []string, blockNrOrHash rpc.BlockNumberOrHash) (*AccountResult, error) {
+func (api *BlockChainAPI) GetProof(ctx context.Context, address common.StateAddress, storageKeys []string, blockNrOrHash rpc.BlockNumberOrHash) (*AccountResult, error) {
 	header, err := headerByNumberOrHash(ctx, api.b, blockNrOrHash)
 	if err != nil {
 		return nil, err
 	}
-	if api.b.ChainConfig().IsOptimismPreBedrock(header.Number) {
+	if historicalAccount(api.b.ChainConfig(), header.Number, address) {
 		if api.b.HistoricalRPCService() != nil {
 			var res AccountResult
 			err := api.b.HistoricalRPCService().CallContext(ctx, &res, "eth_getProof", address, storageKeys, blockNrOrHash)
@@ -418,13 +425,18 @@ func (api *BlockChainAPI) GetProof(ctx context.Context, address common.Address, 
 	if statedb == nil || err != nil {
 		return nil, err
 	}
-	codeHash := statedb.GetCodeHash(address)
-	storageRoot := statedb.GetStorageRoot(address)
+	codeHash := statedb.AccountCodeHash(address)
+	storageRoot := statedb.AccountStorageRoot(address)
+	trieKey, err := state.AccountTrieKey(address)
+
+	if err != nil {
+		return nil, err
+	}
 
 	if len(keys) > 0 {
 		var storageTrie state.Trie
 		if storageRoot != types.EmptyRootHash && storageRoot != (common.Hash{}) {
-			id := trie.StorageTrieID(header.Root, crypto.Keccak256Hash(address.Bytes()), storageRoot)
+			id := trie.StorageTrieID(header.Root, trieKey, storageRoot)
 			st, err := trie.NewStateTrie(id, statedb.Database().TrieDB())
 			if err != nil {
 				return nil, err
@@ -451,7 +463,7 @@ func (api *BlockChainAPI) GetProof(ctx context.Context, address common.Address, 
 			if err := storageTrie.Prove(crypto.Keccak256(key.Bytes()), &proof); err != nil {
 				return nil, err
 			}
-			value := (*hexutil.Big)(statedb.GetState(address, key).Big())
+			value := (*hexutil.Big)(statedb.AccountState(address, key).Big())
 			storageProof[i] = StorageResult{outputKey, value, proof}
 		}
 	}
@@ -461,16 +473,16 @@ func (api *BlockChainAPI) GetProof(ctx context.Context, address common.Address, 
 		return nil, err
 	}
 	var accountProof proofList
-	if err := tr.Prove(crypto.Keccak256(address.Bytes()), &accountProof); err != nil {
+	if err := tr.Prove(trieKey.Bytes(), &accountProof); err != nil {
 		return nil, err
 	}
-	balance := statedb.GetBalance(address).ToBig()
+	balance := statedb.AccountBalance(address).ToBig()
 	return &AccountResult{
 		Address:      address,
 		AccountProof: accountProof,
 		Balance:      (*hexutil.Big)(balance),
 		CodeHash:     codeHash,
-		Nonce:        hexutil.Uint64(statedb.GetNonce(address)),
+		Nonce:        hexutil.Uint64(statedb.AccountNonce(address)),
 		StorageHash:  storageRoot,
 		StorageProof: storageProof,
 	}, statedb.Error()
@@ -607,13 +619,13 @@ func (api *BlockChainAPI) GetUncleCountByBlockHash(ctx context.Context, blockHas
 }
 
 // GetCode returns the code stored at the given address in the state for the given block number.
-func (api *BlockChainAPI) GetCode(ctx context.Context, address common.Address, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+func (api *BlockChainAPI) GetCode(ctx context.Context, address common.StateAddress, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
 	header, err := headerByNumberOrHash(ctx, api.b, blockNrOrHash)
 	if err != nil {
 		return nil, err
 	}
 
-	if api.b.ChainConfig().IsOptimismPreBedrock(header.Number) {
+	if historicalAccount(api.b.ChainConfig(), header.Number, address) {
 		if api.b.HistoricalRPCService() != nil {
 			var res hexutil.Bytes
 			err := api.b.HistoricalRPCService().CallContext(ctx, &res, "eth_getCode", address, blockNrOrHash)
@@ -631,20 +643,20 @@ func (api *BlockChainAPI) GetCode(ctx context.Context, address common.Address, b
 		return nil, err
 	}
 
-	code := state.GetCode(address)
+	code := state.AccountCode(address)
 	return code, state.Error()
 }
 
 // GetStorageAt returns the storage from the state at the given address, key and
 // block number. The rpc.LatestBlockNumber and rpc.PendingBlockNumber meta block
 // numbers are also allowed.
-func (api *BlockChainAPI) GetStorageAt(ctx context.Context, address common.Address, hexKey string, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+func (api *BlockChainAPI) GetStorageAt(ctx context.Context, address common.StateAddress, hexKey string, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
 	header, err := headerByNumberOrHash(ctx, api.b, blockNrOrHash)
 	if err != nil {
 		return nil, err
 	}
 
-	if api.b.ChainConfig().IsOptimismPreBedrock(header.Number) {
+	if historicalAccount(api.b.ChainConfig(), header.Number, address) {
 		if api.b.HistoricalRPCService() != nil {
 			var res hexutil.Bytes
 			err := api.b.HistoricalRPCService().CallContext(ctx, &res, "eth_getStorageAt", address, hexKey, blockNrOrHash)
@@ -666,7 +678,7 @@ func (api *BlockChainAPI) GetStorageAt(ctx context.Context, address common.Addre
 	if err != nil {
 		return nil, fmt.Errorf("unable to decode storage key: %s", err)
 	}
-	res := state.GetState(address, key)
+	res := state.AccountState(address, key)
 	return res[:], state.Error()
 }
 
@@ -1611,14 +1623,19 @@ func (api *TransactionAPI) GetRawTransactionByBlockHashAndIndex(ctx context.Cont
 }
 
 // GetTransactionCount returns the number of transactions the given address has sent for the given block number
-func (api *TransactionAPI) GetTransactionCount(ctx context.Context, address common.Address, blockNrOrHash rpc.BlockNumberOrHash) (*hexutil.Uint64, error) {
-	// Ask transaction pool for the nonce which includes pending transactions
-	if blockNr, ok := blockNrOrHash.Number(); ok && blockNr == rpc.PendingBlockNumber {
-		nonce, err := api.b.GetPoolNonce(ctx, address)
-		if err != nil {
-			return nil, err
+func (api *TransactionAPI) GetTransactionCount(ctx context.Context, address common.StateAddress, blockNrOrHash rpc.BlockNumberOrHash) (*hexutil.Uint64, error) {
+	// Ask transaction pool for the nonce which includes pending transactions.
+	// The pool keys accounts by the 20-byte address.
+	if legacy, ok := address.Legacy(); ok {
+		if blockNr, ok := blockNrOrHash.Number(); ok && blockNr == rpc.PendingBlockNumber {
+			nonce, err := api.b.GetPoolNonce(ctx, legacy)
+
+			if err != nil {
+				return nil, err
+			}
+
+			return (*hexutil.Uint64)(&nonce), nil
 		}
-		return (*hexutil.Uint64)(&nonce), nil
 	}
 	// Resolve block number and use its state to ask for the nonce
 	header, err := headerByNumberOrHash(ctx, api.b, blockNrOrHash)
@@ -1626,7 +1643,7 @@ func (api *TransactionAPI) GetTransactionCount(ctx context.Context, address comm
 		return nil, err
 	}
 
-	if api.b.ChainConfig().IsOptimismPreBedrock(header.Number) {
+	if historicalAccount(api.b.ChainConfig(), header.Number, address) {
 		if api.b.HistoricalRPCService() != nil {
 			var res hexutil.Uint64
 			err := api.b.HistoricalRPCService().CallContext(ctx, &res, "eth_getTransactionCount", address, blockNrOrHash)
@@ -1644,7 +1661,7 @@ func (api *TransactionAPI) GetTransactionCount(ctx context.Context, address comm
 		return nil, err
 	}
 
-	nonce := state.GetNonce(address)
+	nonce := state.AccountNonce(address)
 	return (*hexutil.Uint64)(&nonce), state.Error()
 }
 

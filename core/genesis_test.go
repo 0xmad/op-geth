@@ -228,7 +228,7 @@ func TestReadWriteGenesisAlloc(t *testing.T) {
 			{1}: {Balance: big.NewInt(1), Storage: map[common.Hash]common.Hash{{1}: {1}}},
 			{2}: {Balance: big.NewInt(2), Storage: map[common.Hash]common.Hash{{2}: {2}}},
 		}
-		stateRoot, storageRootMessagePasser, _ = hashAlloc(alloc, false, false)
+		stateRoot, storageRootMessagePasser, _ = hashAlloc(types.GenesisAccounts{Legacy: *alloc}, false, false)
 	)
 	if storageRootMessagePasser != (common.Hash{}) {
 		t.Fatalf("unexpected storage root")
