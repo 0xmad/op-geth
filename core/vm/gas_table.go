@@ -369,16 +369,22 @@ func gasExpEIP158(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memor
 }
 
 func gasCall(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+	address := common.Address(stack.Back(1).Bytes20())
+	return gasCallMeter(evm, contract, stack, mem, memorySize, evm.StateDB.Empty(address), evm.StateDB.Exist(address))
+}
+
+// gasCallMeter is the shared CALL schedule: new-account gas, value transfer,
+// memory expansion, and the 63/64 gas forwarded to the callee.
+func gasCallMeter(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64, empty, exist bool) (uint64, error) {
 	var (
 		gas            uint64
 		transfersValue = !stack.Back(2).IsZero()
-		address        = common.Address(stack.Back(1).Bytes20())
 	)
 	if evm.chainRules.IsEIP158 {
-		if transfersValue && evm.StateDB.Empty(address) {
+		if transfersValue && empty {
 			gas += params.CallNewAccountGas
 		}
-	} else if !evm.StateDB.Exist(address) {
+	} else if !exist {
 		gas += params.CallNewAccountGas
 	}
 	if transfersValue && !evm.chainRules.IsEIP4762 {

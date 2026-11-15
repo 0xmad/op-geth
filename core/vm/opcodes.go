@@ -212,6 +212,15 @@ const (
 	LOG4
 )
 
+// Address32 account operations. Active when Address32Time is set.
+const (
+	BALANCE32     OpCode = 0xa5
+	EXTCODESIZE32 OpCode = 0xa6
+	EXTCODECOPY32 OpCode = 0xa7
+	EXTCODEHASH32 OpCode = 0xa8
+	CALL32        OpCode = 0xa9
+)
+
 // 0xd0 range - eof operations.
 const (
 	DATALOAD  OpCode = 0xd0
@@ -416,6 +425,12 @@ var opCodeToString = [256]string{
 	LOG3: "LOG3",
 	LOG4: "LOG4",
 
+	BALANCE32:     "BALANCE32",
+	EXTCODESIZE32: "EXTCODESIZE32",
+	EXTCODECOPY32: "EXTCODECOPY32",
+	EXTCODEHASH32: "EXTCODEHASH32",
+	CALL32:        "CALL32",
+
 	// 0xd range - eof ops.
 	DATALOAD:  "DATALOAD",
 	DATALOADN: "DATALOADN",
@@ -604,6 +619,11 @@ var stringToOp = map[string]OpCode{
 	"LOG2":            LOG2,
 	"LOG3":            LOG3,
 	"LOG4":            LOG4,
+	"BALANCE32":       BALANCE32,
+	"EXTCODESIZE32":   EXTCODESIZE32,
+	"EXTCODECOPY32":   EXTCODECOPY32,
+	"EXTCODEHASH32":   EXTCODEHASH32,
+	"CALL32":          CALL32,
 	"DATALOAD":        DATALOAD,
 	"DATALOADN":       DATALOADN,
 	"DATASIZE":        DATASIZE,

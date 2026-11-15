@@ -1633,6 +1633,7 @@ type Rules struct {
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsAmsterdam, IsVerkle                                   bool
+	IsAddress32                                             bool
 	IsOptimismBedrock, IsOptimismRegolith                   bool
 	IsOptimismCanyon, IsOptimismFjord                       bool
 	IsOptimismGranite, IsOptimismHolocene                   bool
@@ -1669,6 +1670,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsAmsterdam:      isMerge && c.IsAmsterdam(num, timestamp),
 		IsVerkle:         isVerkle,
 		IsEIP4762:        isVerkle,
+		IsAddress32:      c.IsAddress32(timestamp),
 		// Optimism
 		IsOptimismBedrock:  isMerge && c.IsOptimismBedrock(num),
 		IsOptimismRegolith: isMerge && c.IsOptimismRegolith(timestamp),

@@ -83,6 +83,29 @@ func (s *StateDB) address32Account(addr common.Address32) *types.StateAccount {
 	return acc
 }
 
+// Address32Empty reports whether the address32 is missing or empty under
+// EIP-161 (nonce, balance, and code are all zero).
+func (s *StateDB) Address32Empty(addr common.Address32) bool {
+	acc := s.address32Account(addr)
+
+	if acc == nil {
+		return true
+	}
+
+	balance := acc.Balance
+
+	if balance == nil {
+		balance = common.U2560
+	}
+
+	return acc.Nonce == 0 && balance.IsZero() && bytes.Equal(acc.CodeHash, types.EmptyCodeHash.Bytes())
+}
+
+// Address32Exist reports whether the address32 is present in state.
+func (s *StateDB) Address32Exist(addr common.Address32) bool {
+	return s.address32Account(addr) != nil
+}
+
 // Address32Balance returns the address32 balance, or 0 when it is absent.
 func (s *StateDB) Address32Balance(addr common.Address32) *uint256.Int {
 	acc := s.address32Account(addr)

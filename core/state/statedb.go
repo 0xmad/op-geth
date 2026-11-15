@@ -94,6 +94,10 @@ type StateDB struct {
 	// the address20 map.
 	address32Accounts map[common.Address32]*address32Account
 
+	// address32Access is the warm set for Address32 accounts.
+	// A word in the address20 subspace uses accessList instead.
+	address32Access map[common.Address32]struct{}
+
 	// This map holds 'deleted' objects. An object with the same address
 	// might also occur in the 'stateObjects' map due to account
 	// resurrection. The account value is tracked as the original value
@@ -184,6 +188,7 @@ func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, erro
 		stateObjects:         make(map[common.Address]*stateObject),
 		stateObjectsDestruct: make(map[common.Address]*stateObject),
 		address32Accounts:    make(map[common.Address32]*address32Account),
+		address32Access:      make(map[common.Address32]struct{}),
 		mutations:            make(map[common.Address]*mutation),
 		logs:                 make(map[common.Hash][]*types.Log),
 		preimages:            make(map[common.Hash][]byte),
@@ -721,6 +726,7 @@ func (s *StateDB) Copy() *StateDB {
 		stateObjects:         make(map[common.Address]*stateObject, len(s.stateObjects)),
 		stateObjectsDestruct: make(map[common.Address]*stateObject, len(s.stateObjectsDestruct)),
 		address32Accounts:    make(map[common.Address32]*address32Account, len(s.address32Accounts)),
+		address32Access:      maps.Clone(s.address32Access),
 		mutations:            make(map[common.Address]*mutation, len(s.mutations)),
 		dbErr:                s.dbErr,
 		refund:               s.refund,
@@ -1457,6 +1463,8 @@ func (s *StateDB) Prepare(rules params.Rules, sender, coinbase common.Address, d
 	if rules.IsEIP2929 && rules.IsEIP4762 {
 		panic("eip2929 and eip4762 are both activated")
 	}
+	// Warmth is per transaction. Drop leftovers from the previous one.
+	s.address32Access = make(map[common.Address32]struct{})
 	if rules.IsEIP2929 {
 		// Clear out any leftover from previous executions
 		al := newAccessList()

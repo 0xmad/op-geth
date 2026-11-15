@@ -91,6 +91,31 @@ func (s *StateDB) getOrNewAddress32Account(addr common.Address32) *address32Acco
 	return obj
 }
 
+// Address32InAccessList reports whether the address32 is warm.
+func (s *StateDB) Address32InAccessList(addr common.Address32) bool {
+	if s.address32Access == nil {
+		return false
+	}
+
+	_, ok := s.address32Access[addr]
+	return ok
+}
+
+// AddAddress32ToAccessList warms the address32.
+// A word in the address20 subspace is not warmed here.
+func (s *StateDB) AddAddress32ToAccessList(addr common.Address32) {
+	if s.address32Access == nil {
+		s.address32Access = make(map[common.Address32]struct{})
+	}
+
+	if _, ok := s.address32Access[addr]; ok {
+		return
+	}
+
+	s.address32Access[addr] = struct{}{}
+	s.journal.append(address32AccessListAddChange{account: addr})
+}
+
 // AddAddress32Balance adds amount to the address32.
 func (s *StateDB) AddAddress32Balance(addr common.Address32, amount *uint256.Int) {
 	s.changeAddress32Balance(addr, amount, true)
@@ -174,6 +199,20 @@ func AsStateDB(db any) *StateDB {
 	default:
 		return nil
 	}
+}
+
+type address32AccessListAddChange struct {
+	account common.Address32
+}
+
+func (ch address32AccessListAddChange) revert(s *StateDB) {
+	delete(s.address32Access, ch.account)
+}
+
+func (ch address32AccessListAddChange) dirtied() *common.Address { return nil }
+
+func (ch address32AccessListAddChange) copy() journalEntry {
+	return address32AccessListAddChange{account: ch.account}
 }
 
 type address32CreateChange struct {
