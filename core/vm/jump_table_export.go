@@ -25,37 +25,46 @@ import (
 // LookupInstructionSet returns the instruction set for the fork configured by
 // the rules.
 func LookupInstructionSet(rules params.Rules) (JumpTable, error) {
+	var (
+		jt  JumpTable
+		err error
+	)
 	switch {
 	case rules.IsVerkle:
-		return newCancunInstructionSet(), errors.New("verkle-fork not defined yet")
+		jt, err = newCancunInstructionSet(), errors.New("verkle-fork not defined yet")
 	case rules.IsOsaka:
-		return newOsakaInstructionSet(), nil
+		jt = newOsakaInstructionSet()
 	case rules.IsPrague:
-		return newPragueInstructionSet(), nil
+		jt = newPragueInstructionSet()
 	case rules.IsCancun:
-		return newCancunInstructionSet(), nil
+		jt = newCancunInstructionSet()
 	case rules.IsShanghai:
-		return newShanghaiInstructionSet(), nil
+		jt = newShanghaiInstructionSet()
 	case rules.IsMerge:
-		return newMergeInstructionSet(), nil
+		jt = newMergeInstructionSet()
 	case rules.IsLondon:
-		return newLondonInstructionSet(), nil
+		jt = newLondonInstructionSet()
 	case rules.IsBerlin:
-		return newBerlinInstructionSet(), nil
+		jt = newBerlinInstructionSet()
 	case rules.IsIstanbul:
-		return newIstanbulInstructionSet(), nil
+		jt = newIstanbulInstructionSet()
 	case rules.IsConstantinople:
-		return newConstantinopleInstructionSet(), nil
+		jt = newConstantinopleInstructionSet()
 	case rules.IsByzantium:
-		return newByzantiumInstructionSet(), nil
+		jt = newByzantiumInstructionSet()
 	case rules.IsEIP158:
-		return newSpuriousDragonInstructionSet(), nil
+		jt = newSpuriousDragonInstructionSet()
 	case rules.IsEIP150:
-		return newTangerineWhistleInstructionSet(), nil
+		jt = newTangerineWhistleInstructionSet()
 	case rules.IsHomestead:
-		return newHomesteadInstructionSet(), nil
+		jt = newHomesteadInstructionSet()
+	default:
+		jt = newFrontierInstructionSet()
 	}
-	return newFrontierInstructionSet(), nil
+
+	jt = *applyAddress32(rules, &jt)
+
+	return jt, err
 }
 
 // Stack returns the minimum and maximum stack requirements.

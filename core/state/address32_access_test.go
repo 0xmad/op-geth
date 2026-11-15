@@ -89,6 +89,32 @@ func TestPaddedAccessListEntryWarmsSameAddress20(t *testing.T) {
 	}
 }
 
+func TestAddress32AccessListRevertsAndResets(t *testing.T) {
+	var addr common.Address32
+	addr[0] = 0x11
+
+	statedb := newAccessTestState(t)
+	snap := statedb.Snapshot()
+	statedb.AddAddress32ToAccessList(addr)
+
+	if !statedb.Address32InAccessList(addr) {
+		t.Fatal("address32 access list did not warm the account")
+	}
+
+	statedb.RevertToSnapshot(snap)
+
+	if statedb.Address32InAccessList(addr) {
+		t.Fatal("reverted address32 access list stayed warm")
+	}
+
+	statedb.AddAddress32ToAccessList(addr)
+	statedb.Prepare(params.Rules{IsEIP2929: true}, common.Address{}, common.Address{}, nil, nil, nil)
+
+	if statedb.Address32InAccessList(addr) {
+		t.Fatal("address32 access list stayed warm after Prepare")
+	}
+}
+
 func newAccessTestState(t *testing.T) *StateDB {
 	t.Helper()
 	db := rawdb.NewMemoryDatabase()

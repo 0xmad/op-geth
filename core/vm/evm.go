@@ -203,6 +203,7 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 		}
 	}
 	evm.Config.ExtraEips = extraEips
+	evm.table = applyAddress32(evm.chainRules, evm.table)
 	return evm
 }
 
