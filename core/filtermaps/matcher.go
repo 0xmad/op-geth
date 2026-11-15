@@ -70,7 +70,7 @@ type SyncRange struct {
 // missing or changed during the search process then the resulting logs belonging
 // to that block range might be missing or incorrect.
 // Also note that the returned list may contain false positives.
-func GetPotentialMatches(ctx context.Context, backend MatcherBackend, firstBlock, lastBlock uint64, addresses []common.Address, topics [][]common.Hash) ([]*types.Log, error) {
+func GetPotentialMatches(ctx context.Context, backend MatcherBackend, firstBlock, lastBlock uint64, loggers types.Loggers, topics [][]common.Hash) ([]*types.Log, error) {
 	params := backend.GetParams()
 	// find the log value index range to search
 	firstIndex, err := backend.GetBlockLvPointer(ctx, firstBlock)
@@ -91,9 +91,12 @@ func GetPotentialMatches(ctx context.Context, backend MatcherBackend, firstBlock
 	// addresses.
 	// If the list of addresses is empty then it creates a "wild card" matcher
 	// that signals every index as a potential match.
-	matchAddress := make(matchAny, len(addresses))
-	for i, address := range addresses {
-		matchAddress[i] = &singleMatcher{backend: backend, value: addressValue(address)}
+	matchAddress := make(matchAny, len(loggers.Addresses)+len(loggers.Addresses32))
+	for i, address := range loggers.Addresses {
+		matchAddress[i] = &singleMatcher{backend: backend, value: logAddressValue(address[:])}
+	}
+	for i, address := range loggers.Addresses32 {
+		matchAddress[len(loggers.Addresses)+i] = &singleMatcher{backend: backend, value: logAddressValue(address[:])}
 	}
 	matchers[0] = matchAddress
 	for i, topicList := range topics {

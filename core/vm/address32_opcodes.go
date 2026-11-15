@@ -50,6 +50,7 @@ func enableAddress32(jt *JumpTable) {
 	enableMirrored(jt, EXTCODEHASH32, jt[EXTCODEHASH], opExtCodeHash32, gasAccountCheck32)
 	enableMirrored(jt, EXTCODECOPY32, jt[EXTCODECOPY], opExtCodeCopy32, gasExtCodeCopy32)
 	enableMirrored(jt, CALL32, jt[CALL], opCall32, gasCall32)
+	enableMirrored(jt, STATICCALL32, jt[STATICCALL], opStaticCall32, gasStaticCall32)
 	enableMirrored(jt, CREATE32, jt[CREATE], opCreate32, nil)
 	enableMirrored(jt, CREATE232, jt[CREATE2], opCreate232, nil)
 }
@@ -222,25 +223,36 @@ func gasCall32(fallback gasFunc) gasFunc {
 }
 
 func gasCallAddress32(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64, db *state.StateDB, addr common.Address32) (uint64, error) {
-	cold := address32ColdSurcharge(evm, db, addr)
-
-	if err := useCallSurcharge(evm, contract, cold); err != nil {
-		return 0, err
-	}
-
-	delegation, err := address32DelegationCost(evm, db, addr)
+	cold, delegation, err := chargeAddress32CallSurcharge(evm, contract, db, addr)
 
 	if err != nil {
-		return 0, err
-	}
-
-	if err := useCallSurcharge(evm, contract, delegation); err != nil {
 		return 0, err
 	}
 
 	gas, err := gasCallMeter(evm, contract, stack, mem, memorySize, db.Address32Empty(addr), db.Address32Exist(addr))
 
 	return addChargedCallGas(contract, gas, err, cold, delegation)
+}
+
+// chargeAddress32CallSurcharge charges the cold-account and delegation gas for an address32 call.
+func chargeAddress32CallSurcharge(evm *EVM, contract *Contract, db *state.StateDB, addr common.Address32) (uint64, uint64, error) {
+	cold := address32ColdSurcharge(evm, db, addr)
+
+	if err := useCallSurcharge(evm, contract, cold); err != nil {
+		return 0, 0, err
+	}
+
+	delegation, err := address32DelegationCost(evm, db, addr)
+
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if err := useCallSurcharge(evm, contract, delegation); err != nil {
+		return 0, 0, err
+	}
+
+	return cold, delegation, nil
 }
 
 func addChargedCallGas(contract *Contract, gas uint64, err error, charged, delegation uint64) (uint64, error) {
@@ -258,6 +270,32 @@ func addChargedCallGas(contract *Contract, gas uint64, err error, charged, deleg
 	}
 
 	return sum, nil
+}
+
+// gasStaticCall32 charges STATICCALL gas. An address20 word uses the mirrored calculator.
+func gasStaticCall32(fallback gasFunc) gasFunc {
+	return func(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+		return withAccount(stack.Back(1), evm,
+			func(common.Address) (uint64, error) {
+				return fallback(evm, contract, stack, mem, memorySize)
+			},
+			func(db *state.StateDB, addr common.Address32) (uint64, error) {
+				return gasStaticCallAddress32(evm, contract, stack, mem, memorySize, db, addr)
+			},
+		)
+	}
+}
+
+func gasStaticCallAddress32(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64, db *state.StateDB, addr common.Address32) (uint64, error) {
+	cold, delegation, err := chargeAddress32CallSurcharge(evm, contract, db, addr)
+
+	if err != nil {
+		return 0, err
+	}
+
+	gas, err := gasStaticCall(evm, contract, stack, mem, memorySize)
+
+	return addChargedCallGas(contract, gas, err, cold, delegation)
 }
 
 func opBalance32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
@@ -328,11 +366,6 @@ func opExtCodeHash32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) 
 	)
 }
 
-type callOutcome struct {
-	ret []byte
-	gas uint64
-}
-
 func opCall32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	stack := scope.Stack
 	temp := stack.pop()
@@ -348,83 +381,48 @@ func opCall32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		gas += params.CallStipend
 	}
 
-	outcome, err := withAccount(&addrWord, evm,
-		func(addr common.Address) (callOutcome, error) {
-			ret, returnGas, err := evm.Call(scope.Contract.Address(), addr, args, gas, &value)
-			return callOutcome{ret: ret, gas: returnGas}, err
-		},
-		func(db *state.StateDB, addr common.Address32) (callOutcome, error) {
-			ret, returnGas, err := evm.callAddress32(scope.Contract.Address(), addr, gas, &value)
+	target, err := accountFromSlot(&addrWord)
 
-			if db.Error() != nil {
-				return callOutcome{}, db.Error()
-			}
+	if err != nil {
+		return nil, err
+	}
 
-			return callOutcome{ret: ret, gas: returnGas}, err
-		},
-	)
+	ret, returnGas, callErr := evm.CallAccount(scope.Contract.stateAddress(), target, args, gas, &value, false)
+	return finishOpCall(evm, scope, temp, retOffset, retSize, ret, returnGas, callErr)
+}
 
+func opStaticCall32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	stack := scope.Stack
+	temp := stack.pop()
+	gas := evm.callGasTemp
+	addrWord, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
+	args := scope.Memory.GetPtr(inOffset.Uint64(), inSize.Uint64())
+	target, err := accountFromSlot(&addrWord)
+
+	if err != nil {
+		return nil, err
+	}
+
+	ret, returnGas, callErr := evm.CallAccount(scope.Contract.stateAddress(), target, args, gas, new(uint256.Int), true)
+	return finishOpCall(evm, scope, temp, retOffset, retSize, ret, returnGas, callErr)
+}
+
+func finishOpCall(evm *EVM, scope *ScopeContext, temp, retOffset, retSize uint256.Int, ret []byte, returnGas uint64, err error) ([]byte, error) {
 	if err != nil {
 		temp.Clear()
 	} else {
 		temp.SetOne()
 	}
 
-	stack.push(&temp)
+	scope.Stack.push(&temp)
 
 	if err == nil || err == ErrExecutionReverted {
-		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), outcome.ret)
+		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
 	}
 
-	scope.Contract.RefundGas(outcome.gas, evm.Config.Tracer, tracing.GasChangeCallLeftOverRefunded)
-	evm.returnData = outcome.ret
-
-	return outcome.ret, nil
-}
-
-// callAddress32 transfers value to a codeless address32.
-// An address32 with code reverts the subcall and does not run that code.
-func (evm *EVM) callAddress32(caller common.Address, addr common.Address32, gas uint64, value *uint256.Int) ([]byte, uint64, error) {
-	caller = evm.maybeOverrideCaller(caller)
-
-	if evm.depth > int(params.CallCreateDepth) {
-		return nil, gas, ErrDepth
-	}
-
-	if !value.IsZero() && !evm.Context.CanTransfer(evm.StateDB, caller, value) {
-		return nil, gas, ErrInsufficientBalance
-	}
-
-	db, err := address32DB(evm)
-
-	if err != nil {
-		return nil, gas, err
-	}
-
-	code := db.Address32Code(addr)
-
-	if db.Error() != nil {
-		return nil, gas, db.Error()
-	}
-
-	if len(code) > 0 {
-		return nil, gas, ErrExecutionReverted
-	}
-
-	if value.IsZero() {
-		return nil, gas, nil
-	}
-
-	snapshot := evm.StateDB.Snapshot()
-	evm.StateDB.SubBalance(caller, value, tracing.BalanceChangeTransfer)
-	db.AddAddress32Balance(addr, value)
-
-	if db.Error() != nil {
-		evm.StateDB.RevertToSnapshot(snapshot)
-		return nil, gas, db.Error()
-	}
-
-	return nil, gas, nil
+	scope.Contract.RefundGas(returnGas, evm.Config.Tracer, tracing.GasChangeCallLeftOverRefunded)
+	evm.returnData = ret
+	return ret, nil
 }
 
 // opCreate32 deploys an address32 contract from an address32 frame.

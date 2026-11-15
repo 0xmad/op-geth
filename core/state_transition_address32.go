@@ -176,18 +176,15 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 		return nil, fmt.Errorf("%w: code size %v limit %v", ErrMaxInitCodeSizeExceeded, len(msg.Data), params.MaxInitCodeSize)
 	}
 
-	// Code in the other namespace is not executed. The transaction is included,
-	// the nonce is spent, and fees are paid. The callee is left as it was.
+	// A user contract in the other namespace is not executed. The transaction is
+	// included, the nonce is spent, and fees are paid. The callee is left as it was.
 	// A 7702 delegation is code. A codeless target still receives the value.
+	// A precompile has no account code and runs on the active list.
 	var crossNamespaceRevert bool
 
 	if !creating {
 		code := recipient.code()
 		crossNamespaceRevert = len(code) > 0 && call.From.Kind() != call.To.Kind()
-
-		if len(code) > 0 && !crossNamespaceRevert {
-			return nil, fmt.Errorf("address32 target %s has code", recipient.label())
-		}
 	}
 
 	var l1Cost *big.Int
@@ -244,41 +241,24 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 		return fees.applyCreation()
 	}
 
-	sender.setNonce(sender.nonce() + 1)
+	if crossNamespaceRevert {
+		sender.setNonce(sender.nonce() + 1)
+		gasUsed := min(floor, msg.GasLimit)
 
-	if !crossNamespaceRevert {
-		value, overflow := uint256.FromBig(msg.Value)
+		fees.refundUnspent(msg.GasLimit - gasUsed)
 
-		if overflow {
-			return nil, fmt.Errorf("%w: address %s", ErrInsufficientFundsForTransfer, sender.label())
-		}
-
-		if err := sender.sub(value.ToBig(), tracing.BalanceChangeTransfer); err != nil {
+		if err := fees.settle(gasUsed); err != nil {
 			return nil, err
 		}
 
-		recipient.add(value, tracing.BalanceChangeTransfer)
+		return &ExecutionResult{
+			UsedGas:    gasUsed,
+			MaxUsedGas: gasUsed,
+			Err:        vm.ErrExecutionReverted,
+		}, nil
 	}
 
-	gasUsed := floor
-
-	if gasUsed > msg.GasLimit {
-		gasUsed = msg.GasLimit
-	}
-
-	fees.refundUnspent(msg.GasLimit - gasUsed)
-
-	if err := fees.settle(gasUsed); err != nil {
-		return nil, err
-	}
-
-	result := &ExecutionResult{UsedGas: gasUsed, MaxUsedGas: gasUsed}
-
-	if crossNamespaceRevert {
-		result.Err = vm.ErrExecutionReverted
-	}
-
-	return result, nil
+	return fees.applyCall()
 }
 
 // address32Fees is the fee context shared by an address32 call and an address32 creation.
@@ -354,6 +334,29 @@ func (f address32Fees) applyCreation() (*ExecutionResult, error) {
 		f.sender.setNonce(f.sender.nonce() + 1)
 	}
 
+	return f.finish(gasRemaining, ret, vmerr)
+}
+
+func (f address32Fees) applyCall() (*ExecutionResult, error) {
+	gasRemaining := f.msg.GasLimit - f.intrinsic
+	value, overflow := uint256.FromBig(f.msg.Value)
+
+	if overflow {
+		return nil, fmt.Errorf("%w: address %s", ErrInsufficientFundsForTransfer, f.sender.label())
+	}
+
+	f.sender.setNonce(f.sender.nonce() + 1)
+	f.evm.SetTxContext(NewEVMTxContext(f.msg))
+	ret, gasRemaining, vmerr := f.evm.CallAccount(f.msg.Address32.From, *f.msg.Address32.To, f.msg.Data, gasRemaining, value, false)
+
+	if vmerr == nil {
+		vmerr = f.statedb.Error()
+	}
+
+	return f.finish(gasRemaining, ret, vmerr)
+}
+
+func (f address32Fees) finish(gasRemaining uint64, ret []byte, vmerr error) (*ExecutionResult, error) {
 	refund := f.statedb.GetRefund()
 	gasUsed := f.msg.GasLimit - gasRemaining
 	cap := gasUsed / params.RefundQuotient

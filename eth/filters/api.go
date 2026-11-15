@@ -450,6 +450,7 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 
 		// Block filter requested, construct a single-shot filter
 		filter = api.sys.NewBlockFilter(*crit.BlockHash, crit.Addresses, crit.Topics)
+		filter.loggers.Addresses32 = crit.Addresses32
 	} else {
 		// Convert the RPC block numbers into internal representations
 		begin := rpc.LatestBlockNumber.Int64()
@@ -469,6 +470,7 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, crit.Addresses, crit.Topics)
+		filter.loggers.Addresses32 = crit.Addresses32
 	}
 
 	// Run the filter and return all the logs
@@ -509,6 +511,7 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 	if f.crit.BlockHash != nil {
 		// Block filter requested, construct a single-shot filter
 		filter = api.sys.NewBlockFilter(*f.crit.BlockHash, f.crit.Addresses, f.crit.Topics)
+		filter.loggers.Addresses32 = f.crit.Addresses32
 	} else {
 		// Convert the RPC block numbers into internal representations
 		begin := rpc.LatestBlockNumber.Int64()
@@ -521,6 +524,7 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, f.crit.Addresses, f.crit.Topics)
+		filter.loggers.Addresses32 = f.crit.Addresses32
 	}
 	// Run the filter and return all the logs
 	logs, err := filter.Logs(ctx)
@@ -631,28 +635,26 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 	}
 
 	args.Addresses = []common.Address{}
+	args.Addresses32 = []common.Address32{}
 
 	if raw.Addresses != nil {
-		// raw.Address can contain a single address or an array of addresses
+		// raw.Address can contain a single address or an array of addresses.
+		// A 32-byte word is an address32 logger. Twelve leading zero bytes are an address20.
 		switch rawAddr := raw.Addresses.(type) {
 		case []interface{}:
 			for i, addr := range rawAddr {
 				if strAddr, ok := addr.(string); ok {
-					addr, err := decodeAddress(strAddr)
-					if err != nil {
+					if err := appendFilterAddress(args, strAddr); err != nil {
 						return fmt.Errorf("invalid address at index %d: %v", i, err)
 					}
-					args.Addresses = append(args.Addresses, addr)
 				} else {
 					return fmt.Errorf("non-string address at index %d", i)
 				}
 			}
 		case string:
-			addr, err := decodeAddress(rawAddr)
-			if err != nil {
+			if err := appendFilterAddress(args, rawAddr); err != nil {
 				return fmt.Errorf("invalid address: %v", err)
 			}
-			args.Addresses = []common.Address{addr}
 		default:
 			return errors.New("invalid addresses in query")
 		}
@@ -705,6 +707,31 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	return nil
+}
+
+func appendFilterAddress(args *FilterCriteria, s string) error {
+	b, err := hexutil.Decode(s)
+
+	if err != nil {
+		return err
+	}
+
+	account, err := common.StateAddressFromBytes(b)
+
+	if err != nil {
+		if len(b) != common.AddressLength && len(b) != common.Address32Length {
+			return fmt.Errorf("hex has invalid length %d after decoding; expected %d or %d for address", len(b), common.AddressLength, common.Address32Length)
+		}
+
+		return err
+	}
+
+	account.Use(func(addr common.Address) {
+		args.Addresses = append(args.Addresses, addr)
+	}, func(addr common.Address32) {
+		args.Addresses32 = append(args.Addresses32, addr)
+	})
 	return nil
 }
 

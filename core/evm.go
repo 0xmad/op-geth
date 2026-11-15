@@ -92,6 +92,13 @@ func NewEVMTxContext(msg *Message) vm.TxContext {
 		GasPrice:   new(big.Int).Set(msg.GasPrice),
 		BlobHashes: msg.BlobHashes,
 	}
+
+	if msg.Address32 != nil {
+		if addr, ok := msg.Address32.From.Address32(); ok {
+			ctx.Origin32 = new(common.Address32)
+			*ctx.Origin32 = addr
+		}
+	}
 	if msg.BlobGasFeeCap != nil {
 		ctx.BlobFeeCap = new(big.Int).Set(msg.BlobGasFeeCap)
 	}

@@ -110,7 +110,7 @@ func CreateBloom(receipt *Receipt) Bloom {
 		buf [6]byte
 	)
 	for _, log := range receipt.Logs {
-		bin.AddWithBuffer(log.Address.Bytes(), &buf)
+		bin.AddWithBuffer(log.LoggerBytes(), &buf)
 		for _, b := range log.Topics {
 			bin.AddWithBuffer(b[:], &buf)
 		}

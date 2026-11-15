@@ -57,6 +57,19 @@ func Address32StateAddress(addr Address32) StateAddress {
 	return out
 }
 
+// StateAddressFromBytes names the account encoded as 20 or 32 bytes.
+// A 32-byte word whose top 12 bytes are zero is the address20 in the low 20 bytes.
+func StateAddressFromBytes(b []byte) (StateAddress, error) {
+	switch len(b) {
+	case AddressLength:
+		return Address20StateAddress(BytesToAddress(b)), nil
+	case Address32Length:
+		return StateAddressFromWord(b)
+	default:
+		return StateAddress{}, fmt.Errorf("state address must be 20 or 32 bytes, have %d", len(b))
+	}
+}
+
 // StateAddressFromWord names the account in a 32-byte word.
 // Twelve leading zero bytes select the address20 in the low 20 bytes.
 func StateAddressFromWord(word []byte) (StateAddress, error) {
@@ -170,30 +183,14 @@ func (a *StateAddress) UnmarshalText(input []byte) error {
 		return err
 	}
 
-	switch len(b) {
-	case AddressLength:
-		*a = StateAddress{kind: StateAddress20}
-		copy(a.data[:], b)
-		return nil
-	case Address32Length:
-		if address20, ok := Address20Of(b); ok {
-			*a = StateAddress{kind: StateAddress20}
-			copy(a.data[:], address20[:])
-			return nil
-		}
+	parsed, err := StateAddressFromBytes(b)
 
-		address32, err := NewAddress32(b)
-
-		if err != nil {
-			return err
-		}
-
-		*a = StateAddress{kind: StateAddress32}
-		copy(a.data[:], address32[:])
-		return nil
-	default:
-		return fmt.Errorf("state address must be 20 or 32 bytes, have %d", len(b))
+	if err != nil {
+		return err
 	}
+
+	*a = parsed
+	return nil
 }
 
 // UnmarshalJSON parses a quoted hex string.

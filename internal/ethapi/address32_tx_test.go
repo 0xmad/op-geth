@@ -304,3 +304,77 @@ func TestAddress32CreateReceiptAndCodeRPC(t *testing.T) {
 		t.Fatalf("code = %s, want 0x42", code)
 	}
 }
+
+func TestAddress32EthCallRunsContract(t *testing.T) {
+	key, err := crypto.HexToECDSA(anvil0Key)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sender, err := crypto.PubkeyToAddress32(key.PublicKey)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var contract common.Address32
+	contract[0] = 0x42
+	contract[31] = 0x24
+	cfg := *params.OptimismTestConfig
+	ts := uint64(0)
+	cfg.Address32Time = &ts
+	cfg.JovianTime = nil
+	code := []byte{0x60, 0x2a, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3}
+	extra := eip1559.EncodeHoloceneExtraData(250, 6)
+	genesis := &core.Genesis{
+		Config:     &cfg,
+		Difficulty: big.NewInt(0),
+		ExtraData:  extra,
+		GasLimit:   30_000_000,
+		BaseFee:    big.NewInt(1),
+		Alloc: types.GenesisAlloc{
+			types.L1BlockAddr: {Storage: map[common.Hash]common.Hash{
+				types.L1FeeScalarsSlot:      {19: 1},
+				types.L1BaseFeeSlot:         common.BigToHash(big.NewInt(1_000_000)),
+				types.OperatorFeeParamsSlot: {31: 10},
+			}},
+		},
+		Address32Alloc: map[common.Address32]types.Account{
+			sender:   {Balance: big.NewInt(params.Ether)},
+			contract: {Code: code},
+		},
+	}
+	backend := newTestBackend(t, 1, genesis, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
+		b.SetExtra(extra)
+	})
+	defer backend.chain.Stop()
+
+	server := rpc.NewServer()
+	defer server.Stop()
+
+	if err := server.RegisterName("eth", NewBlockChainAPI(backend)); err != nil {
+		t.Fatal(err)
+	}
+
+	client := rpc.DialInProc(server)
+	defer client.Close()
+
+	call := map[string]any{
+		"from":       "0x" + hex.EncodeToString(sender[:]),
+		"to":         "0x" + hex.EncodeToString(contract[:]),
+		"senderKind": "0x1",
+		"gas":        "0x186a0",
+	}
+	var ret string
+
+	if err := client.Call(&ret, "eth_call", call, "latest"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "0x" + hex.EncodeToString(append(make([]byte, 31), 0x2a))
+
+	if ret != want {
+		t.Fatalf("eth_call = %s, want %s", ret, want)
+	}
+}

@@ -80,7 +80,9 @@ type BlockContext struct {
 // All fields can change between transactions.
 type TxContext struct {
 	// Message information
-	Origin       common.Address      // Provides information for ORIGIN
+	Origin common.Address // Provides information for ORIGIN
+	// Origin32 is the address32 transaction sender. It is nil when Origin is the address20 sender.
+	Origin32     *common.Address32
 	GasPrice     *big.Int            // Provides information for GASPRICE (and is used to zero the basefee if NoBaseFee is set)
 	BlobHashes   []common.Hash       // Provides information for BLOBHASH
 	BlobFeeCap   *big.Int            // Is used to zero the blobbasefee if NoBaseFee is set
@@ -104,8 +106,11 @@ type EVM struct {
 	// StateDB gives access to the underlying state
 	StateDB StateDB
 
-	// table holds the opcode specific handlers
+	// table holds the opcode handlers for an address20 frame.
 	table *JumpTable
+	// address32Table holds the opcode handlers for an address32 frame.
+	// Nil when Address32 is inactive.
+	address32Table *JumpTable
 
 	// depth is the current call stack
 	depth int
@@ -204,6 +209,11 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 	}
 	evm.Config.ExtraEips = extraEips
 	evm.table = applyAddress32(evm.chainRules, evm.table)
+
+	if evm.chainRules.IsAddress32 {
+		evm.address32Table = address32FrameTable(evm.table)
+	}
+
 	return evm
 }
 
