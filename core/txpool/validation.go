@@ -302,7 +302,7 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 		log.Error("Transaction sender recovery failed", "err", err)
 		return err
 	}
-	return validateLegacySenderState(tx, from, opts)
+	return validateAddress20SenderState(tx, from, opts)
 }
 
 func validateAddress32TransactionWithState(tx *types.Transaction, signer types.Signer, opts *ValidationOptionsWithState) error {
@@ -313,21 +313,21 @@ func validateAddress32TransactionWithState(tx *types.Transaction, signer types.S
 		return err
 	}
 
-	if legacy, ok := account.Legacy(); ok {
-		return validateLegacySenderState(tx, legacy, opts)
+	if address20, ok := account.Address20(); ok {
+		return validateAddress20SenderState(tx, address20, opts)
 	}
 
-	wide, _ := account.Address32()
-	next := opts.State.Address32Nonce(wide)
+	address32, _ := account.Address32()
+	next := opts.State.Address32Nonce(address32)
 
 	if next > tx.Nonce() {
 		return fmt.Errorf("%w: next nonce %v, tx nonce %v", core.ErrNonceTooLow, next, tx.Nonce())
 	}
-	// A wide sender is not indexed by the 20-byte pool, so it has no queued spend.
-	return checkSenderFunds(tx, opts.State.Address32Balance(wide).ToBig(), new(big.Int), nil, opts.RollupCostFn)
+	// An address32 sender is not indexed by the 20-byte pool, so it has no queued spend.
+	return checkSenderFunds(tx, opts.State.Address32Balance(address32).ToBig(), new(big.Int), nil, opts.RollupCostFn)
 }
 
-func validateLegacySenderState(tx *types.Transaction, from common.Address, opts *ValidationOptionsWithState) error {
+func validateAddress20SenderState(tx *types.Transaction, from common.Address, opts *ValidationOptionsWithState) error {
 	next := opts.State.GetNonce(from)
 	if next > tx.Nonce() {
 		return fmt.Errorf("%w: next nonce %v, tx nonce %v", core.ErrNonceTooLow, next, tx.Nonce())

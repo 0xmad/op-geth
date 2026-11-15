@@ -214,7 +214,7 @@ func MakeReceipt(evm *vm.EVM, result *ExecutionResult, statedb *state.StateDB, b
 	}
 
 	// If the transaction created a contract, store the creation address in the receipt.
-	// A type 0x05 wide recipient is not a creation.
+	// A type 0x05 address32 recipient is not a creation.
 	if tx.CreatesContract() {
 		receipt.ContractAddress = crypto.CreateAddress(evm.TxContext.Origin, nonce)
 	}

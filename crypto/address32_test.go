@@ -21,7 +21,7 @@ import (
 	"testing"
 )
 
-// anvil account 0. Legacy address is the well-known EIP-55 value.
+// anvil account 0. The address20 is the well-known EIP-55 value.
 const anvil0Key = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
 func TestPubkeyToAddressUnchanged(t *testing.T) {

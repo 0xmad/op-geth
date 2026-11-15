@@ -190,13 +190,13 @@ type Message struct {
 	RollupCostData types.RollupCostData // RollupCostData caches data to compute the fee we charge for data availability
 
 	// Address32 is set for a type 0x05 value transfer. From and To still name
-	// a legacy party when that party is a 20-byte account.
+	// an address20 when that party is a 20-byte account.
 	Address32 *Address32Call
 }
 
 // Address32Call is the sender, recipient, and access list of a type 0x05 transaction.
 type Address32Call struct {
-	// SenderKind selects the account that pays. Kind 0 is legacy and kind 1 is wide.
+	// SenderKind selects the account that pays. Kind 0 is an address20 and kind 1 is an address32.
 	SenderKind byte
 	// From is the account that pays for the call.
 	From common.StateAddress

@@ -89,10 +89,10 @@ type StateDB struct {
 	// processing a state transition.
 	stateObjects map[common.Address]*stateObject
 
-	// wideAccounts holds Address32 accounts touched during this state.
+	// address32Accounts holds Address32 accounts touched during this state.
 	// The trie key is keccak256 of the 32-byte word, so they do not share
-	// the legacy address map.
-	wideAccounts map[common.Address32]*wideAccount
+	// the address20 map.
+	address32Accounts map[common.Address32]*address32Account
 
 	// This map holds 'deleted' objects. An object with the same address
 	// might also occur in the 'stateObjects' map due to account
@@ -183,7 +183,7 @@ func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, erro
 		reader:               reader,
 		stateObjects:         make(map[common.Address]*stateObject),
 		stateObjectsDestruct: make(map[common.Address]*stateObject),
-		wideAccounts:         make(map[common.Address32]*wideAccount),
+		address32Accounts:    make(map[common.Address32]*address32Account),
 		mutations:            make(map[common.Address]*mutation),
 		logs:                 make(map[common.Hash][]*types.Log),
 		preimages:            make(map[common.Hash][]byte),
@@ -720,7 +720,7 @@ func (s *StateDB) Copy() *StateDB {
 		originalRoot:         s.originalRoot,
 		stateObjects:         make(map[common.Address]*stateObject, len(s.stateObjects)),
 		stateObjectsDestruct: make(map[common.Address]*stateObject, len(s.stateObjectsDestruct)),
-		wideAccounts:         make(map[common.Address32]*wideAccount, len(s.wideAccounts)),
+		address32Accounts:    make(map[common.Address32]*address32Account, len(s.address32Accounts)),
 		mutations:            make(map[common.Address]*mutation, len(s.mutations)),
 		dbErr:                s.dbErr,
 		refund:               s.refund,
@@ -749,8 +749,8 @@ func (s *StateDB) Copy() *StateDB {
 	if s.accessEvents != nil {
 		state.accessEvents = s.accessEvents.Copy()
 	}
-	for addr, obj := range s.wideAccounts {
-		state.wideAccounts[addr] = obj.copy()
+	for addr, obj := range s.address32Accounts {
+		state.address32Accounts[addr] = obj.copy()
 	}
 	// Deep copy cached state objects.
 	for addr, obj := range s.stateObjects {
@@ -1006,7 +1006,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Track the amount of time wasted on hashing the account trie
 	defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
 
-	s.commitWideAccounts()
+	s.commitAddress32Accounts()
 
 	hash := s.trie.Hash()
 

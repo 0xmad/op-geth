@@ -29,16 +29,16 @@ import (
 	"github.com/holiman/uint256"
 )
 
-// insertWideAlloc writes Address32 genesis accounts into the Merkle Patricia
-// trie at parent. The trie key is keccak256 of the 32-byte word. Legacy
-// accounts are left where they are. An empty wide set returns parent.
-func insertWideAlloc(parent common.Hash, tdb *triedb.Database, wide map[common.Address32]types.Account) (common.Hash, error) {
-	if len(wide) == 0 {
+// insertAddress32Alloc writes Address32 genesis accounts into the Merkle Patricia
+// trie at parent. The trie key is keccak256 of the 32-byte word. Address20
+// accounts are left where they are. An empty address32 set returns parent.
+func insertAddress32Alloc(parent common.Hash, tdb *triedb.Database, address32 map[common.Address32]types.Account) (common.Hash, error) {
+	if len(address32) == 0 {
 		return parent, nil
 	}
 
 	if tdb == nil {
-		return common.Hash{}, errors.New("wide genesis account requires a trie database")
+		return common.Hash{}, errors.New("address32 genesis account requires a trie database")
 	}
 
 	accTrie, err := trie.NewStateTrie(trie.StateTrieID(parent), tdb)
@@ -51,12 +51,12 @@ func insertWideAlloc(parent common.Hash, tdb *triedb.Database, wide map[common.A
 	codeBatch := tdb.Disk().NewBatch()
 	wroteCode := false
 
-	for addr, account := range wide {
+	for addr, account := range address32 {
 		addrHash := crypto.Keccak256Hash(addr[:])
 		storageRoot := types.EmptyRootHash
 
 		if len(account.Storage) > 0 {
-			root, nodes, err := writeWideStorage(tdb, parent, addrHash, account.Storage)
+			root, nodes, err := writeAddress32Storage(tdb, parent, addrHash, account.Storage)
 
 			if err != nil {
 				return common.Hash{}, err
@@ -106,7 +106,7 @@ func insertWideAlloc(parent common.Hash, tdb *triedb.Database, wide map[common.A
 	newRoot, nodes := accTrie.Commit(true)
 
 	if nodes == nil {
-		return common.Hash{}, errors.New("wide genesis account trie commit produced no nodes")
+		return common.Hash{}, errors.New("address32 genesis account trie commit produced no nodes")
 	}
 
 	if err := merged.Merge(nodes); err != nil {
@@ -120,7 +120,7 @@ func insertWideAlloc(parent common.Hash, tdb *triedb.Database, wide map[common.A
 	return newRoot, nil
 }
 
-func writeWideStorage(tdb *triedb.Database, parent, addrHash common.Hash, storage map[common.Hash]common.Hash) (common.Hash, *trienode.NodeSet, error) {
+func writeAddress32Storage(tdb *triedb.Database, parent, addrHash common.Hash, storage map[common.Hash]common.Hash) (common.Hash, *trienode.NodeSet, error) {
 	st, err := trie.NewStateTrie(trie.StorageTrieID(parent, addrHash, types.EmptyRootHash), tdb)
 
 	if err != nil {

@@ -29,25 +29,25 @@ import (
 	"github.com/holiman/uint256"
 )
 
-// AddLegacyAccessPreimage warms the legacy account named by preimage.
+// AddAddress20AccessPreimage warms the address20 named by preimage.
 // A 20-byte entry and the same account left-padded to 32 bytes warm one account.
-// An Address32 is rejected here; it is not cropped into a legacy account.
-func (s *StateDB) AddLegacyAccessPreimage(preimage []byte) error {
-	addr, ok := common.LegacyAddressOf(preimage)
+// An Address32 is rejected here; it is not cropped into an address20.
+func (s *StateDB) AddAddress20AccessPreimage(preimage []byte) error {
+	addr, ok := common.Address20Of(preimage)
 
 	if !ok {
-		return fmt.Errorf("access-list entry %x is not a legacy account", preimage)
+		return fmt.Errorf("access-list entry %x is not an address20", preimage)
 	}
 
 	s.AddAddressToAccessList(addr)
 	return nil
 }
 
-// Address32 loads the wide account stored under keccak256 of its 32-byte word.
+// Address32 loads the address32 stored under keccak256 of its 32-byte word.
 // A pending write in this state is returned ahead of the committed trie.
 // A missing account returns a nil account and a nil error.
 func (s *StateDB) Address32(addr common.Address32) (*types.StateAccount, error) {
-	if obj := s.liveWide(addr); obj != nil {
+	if obj := s.liveAddress32(addr); obj != nil {
 		return obj.data.Copy(), nil
 	}
 
@@ -70,7 +70,7 @@ func (s *StateDB) address32FromTrie(addr common.Address32) (*types.StateAccount,
 	return stateTrie.GetAccountByHash(crypto.Keccak256Hash(addr[:]))
 }
 
-// address32Account loads a wide account and records a read error on StateDB.
+// address32Account loads an address32 and records a read error on StateDB.
 // A missing account returns nil.
 func (s *StateDB) address32Account(addr common.Address32) *types.StateAccount {
 	acc, err := s.Address32(addr)
@@ -83,7 +83,7 @@ func (s *StateDB) address32Account(addr common.Address32) *types.StateAccount {
 	return acc
 }
 
-// Address32Balance returns the wide account balance, or 0 when it is absent.
+// Address32Balance returns the address32 balance, or 0 when it is absent.
 func (s *StateDB) Address32Balance(addr common.Address32) *uint256.Int {
 	acc := s.address32Account(addr)
 
@@ -94,7 +94,7 @@ func (s *StateDB) Address32Balance(addr common.Address32) *uint256.Int {
 	return acc.Balance.Clone()
 }
 
-// Address32Nonce returns the wide account nonce, or 0 when it is absent.
+// Address32Nonce returns the address32 nonce, or 0 when it is absent.
 func (s *StateDB) Address32Nonce(addr common.Address32) uint64 {
 	acc := s.address32Account(addr)
 
@@ -105,7 +105,7 @@ func (s *StateDB) Address32Nonce(addr common.Address32) uint64 {
 	return acc.Nonce
 }
 
-// Address32Code returns the wide account code, or nil when it is absent or empty.
+// Address32Code returns the address32 code, or nil when it is absent or empty.
 func (s *StateDB) Address32Code(addr common.Address32) []byte {
 	acc := s.address32Account(addr)
 
@@ -116,7 +116,7 @@ func (s *StateDB) Address32Code(addr common.Address32) []byte {
 	return rawdb.ReadCode(s.db.TrieDB().Disk(), common.BytesToHash(acc.CodeHash))
 }
 
-// Address32CodeHash returns the wide account code hash.
+// Address32CodeHash returns the address32 code hash.
 // A missing account returns the zero hash, matching GetCodeHash.
 func (s *StateDB) Address32CodeHash(addr common.Address32) common.Hash {
 	acc := s.address32Account(addr)
@@ -128,7 +128,7 @@ func (s *StateDB) Address32CodeHash(addr common.Address32) common.Hash {
 	return common.BytesToHash(acc.CodeHash)
 }
 
-// Address32StorageRoot returns the wide account storage root.
+// Address32StorageRoot returns the address32 storage root.
 // A missing account returns the zero hash, matching GetStorageRoot.
 func (s *StateDB) Address32StorageRoot(addr common.Address32) common.Hash {
 	acc := s.address32Account(addr)
@@ -140,7 +140,7 @@ func (s *StateDB) Address32StorageRoot(addr common.Address32) common.Hash {
 	return acc.Root
 }
 
-// Address32State returns the wide account storage value at key, or the zero
+// Address32State returns the address32 storage value at key, or the zero
 // hash when the account or the slot is absent.
 func (s *StateDB) Address32State(addr common.Address32, key common.Hash) common.Hash {
 	acc := s.address32Account(addr)
@@ -167,11 +167,11 @@ func (s *StateDB) Address32State(addr common.Address32, key common.Hash) common.
 }
 
 // readAccount dispatches on the account kind. A new kind is a case here.
-func readAccount[T any](s *StateDB, address common.StateAddress, legacy func(common.Address) T, address32 func(common.Address32) T, zero T) T {
+func readAccount[T any](s *StateDB, address common.StateAddress, address20 func(common.Address) T, address32 func(common.Address32) T, zero T) T {
 	switch address.Kind() {
-	case common.StateAddressLegacy:
-		account, _ := address.Legacy()
-		return legacy(account)
+	case common.StateAddress20:
+		account, _ := address.Address20()
+		return address20(account)
 	case common.StateAddress32:
 		account, _ := address.Address32()
 		return address32(account)
@@ -182,7 +182,7 @@ func readAccount[T any](s *StateDB, address common.StateAddress, legacy func(com
 }
 
 // AccountTrieKey is keccak256 of the account preimage. An Address32 hashes
-// the 32-byte word. A legacy account hashes the 20-byte address.
+// the 32-byte word. An address20 hashes the 20-byte address.
 func AccountTrieKey(address common.StateAddress) (common.Hash, error) {
 	preimage, err := address.Preimage()
 
@@ -193,32 +193,32 @@ func AccountTrieKey(address common.StateAddress) (common.Hash, error) {
 	return crypto.Keccak256Hash(preimage), nil
 }
 
-// AccountBalance returns the balance of a legacy account or an Address32.
+// AccountBalance returns the balance of an address20 or an Address32.
 func (s *StateDB) AccountBalance(address common.StateAddress) *uint256.Int {
 	return readAccount(s, address, s.GetBalance, s.Address32Balance, common.U2560.Clone())
 }
 
-// AccountNonce returns the nonce of a legacy account or an Address32.
+// AccountNonce returns the nonce of an address20 or an Address32.
 func (s *StateDB) AccountNonce(address common.StateAddress) uint64 {
 	return readAccount(s, address, s.GetNonce, s.Address32Nonce, 0)
 }
 
-// AccountCode returns the code of a legacy account or an Address32.
+// AccountCode returns the code of an address20 or an Address32.
 func (s *StateDB) AccountCode(address common.StateAddress) []byte {
 	return readAccount(s, address, s.GetCode, s.Address32Code, nil)
 }
 
-// AccountCodeHash returns the code hash of a legacy account or an Address32.
+// AccountCodeHash returns the code hash of an address20 or an Address32.
 func (s *StateDB) AccountCodeHash(address common.StateAddress) common.Hash {
 	return readAccount(s, address, s.GetCodeHash, s.Address32CodeHash, common.Hash{})
 }
 
-// AccountStorageRoot returns the storage root of a legacy account or an Address32.
+// AccountStorageRoot returns the storage root of an address20 or an Address32.
 func (s *StateDB) AccountStorageRoot(address common.StateAddress) common.Hash {
 	return readAccount(s, address, s.GetStorageRoot, s.Address32StorageRoot, common.Hash{})
 }
 
-// AccountState returns the storage value of a legacy account or an Address32.
+// AccountState returns the storage value of an address20 or an Address32.
 func (s *StateDB) AccountState(address common.StateAddress, key common.Hash) common.Hash {
 	return readAccount(s, address,
 		func(addr common.Address) common.Hash { return s.GetState(addr, key) },

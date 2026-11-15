@@ -25,16 +25,16 @@ import (
 	"github.com/holiman/uint256"
 )
 
-// wideAccount is an Address32 account tracked inside one state transition.
-type wideAccount struct {
+// address32Account is an Address32 account tracked inside one state transition.
+type address32Account struct {
 	data    types.StateAccount
 	origin  *types.StateAccount
 	created bool
 	dirty   bool
 }
 
-func (w *wideAccount) copy() *wideAccount {
-	out := &wideAccount{
+func (w *address32Account) copy() *address32Account {
+	out := &address32Account{
 		data:    *w.data.Copy(),
 		created: w.created,
 		dirty:   w.dirty,
@@ -47,20 +47,20 @@ func (w *wideAccount) copy() *wideAccount {
 	return out
 }
 
-func (s *StateDB) liveWide(addr common.Address32) *wideAccount {
-	if s.wideAccounts == nil {
+func (s *StateDB) liveAddress32(addr common.Address32) *address32Account {
+	if s.address32Accounts == nil {
 		return nil
 	}
 
-	return s.wideAccounts[addr]
+	return s.address32Accounts[addr]
 }
 
-func (s *StateDB) getOrNewWideAccount(addr common.Address32) *wideAccount {
-	if s.wideAccounts == nil {
-		s.wideAccounts = make(map[common.Address32]*wideAccount)
+func (s *StateDB) getOrNewAddress32Account(addr common.Address32) *address32Account {
+	if s.address32Accounts == nil {
+		s.address32Accounts = make(map[common.Address32]*address32Account)
 	}
 
-	if obj := s.wideAccounts[addr]; obj != nil {
+	if obj := s.address32Accounts[addr]; obj != nil {
 		return obj
 	}
 
@@ -68,10 +68,10 @@ func (s *StateDB) getOrNewWideAccount(addr common.Address32) *wideAccount {
 
 	if err != nil {
 		s.setError(err)
-		return &wideAccount{data: *types.NewEmptyStateAccount()}
+		return &address32Account{data: *types.NewEmptyStateAccount()}
 	}
 
-	obj := &wideAccount{data: *types.NewEmptyStateAccount()}
+	obj := &address32Account{data: *types.NewEmptyStateAccount()}
 
 	if loaded != nil {
 		obj.data = *loaded.Copy()
@@ -83,20 +83,20 @@ func (s *StateDB) getOrNewWideAccount(addr common.Address32) *wideAccount {
 		obj.origin = loaded.Copy()
 	} else {
 		obj.created = true
-		s.journal.append(wideCreateChange{account: addr})
+		s.journal.append(address32CreateChange{account: addr})
 	}
 
-	s.wideAccounts[addr] = obj
+	s.address32Accounts[addr] = obj
 
 	return obj
 }
 
-// AddAddress32Balance adds amount to the wide account.
+// AddAddress32Balance adds amount to the address32.
 func (s *StateDB) AddAddress32Balance(addr common.Address32, amount *uint256.Int) {
 	s.changeAddress32Balance(addr, amount, true)
 }
 
-// SubAddress32Balance subtracts amount from the wide account.
+// SubAddress32Balance subtracts amount from the address32.
 func (s *StateDB) SubAddress32Balance(addr common.Address32, amount *uint256.Int) {
 	s.changeAddress32Balance(addr, amount, false)
 }
@@ -106,13 +106,13 @@ func (s *StateDB) changeAddress32Balance(addr common.Address32, amount *uint256.
 		return
 	}
 
-	obj := s.getOrNewWideAccount(addr)
+	obj := s.getOrNewAddress32Account(addr)
 
 	if obj.data.Balance == nil {
 		obj.data.Balance = new(uint256.Int)
 	}
 
-	s.journal.append(wideBalanceChange{account: addr, prev: obj.data.Balance.Clone()})
+	s.journal.append(address32BalanceChange{account: addr, prev: obj.data.Balance.Clone()})
 
 	if add {
 		obj.data.Balance = new(uint256.Int).Add(obj.data.Balance, amount)
@@ -123,22 +123,22 @@ func (s *StateDB) changeAddress32Balance(addr common.Address32, amount *uint256.
 	obj.dirty = true
 }
 
-// SetAddress32Nonce sets the nonce of the wide account.
+// SetAddress32Nonce sets the nonce of the address32.
 func (s *StateDB) SetAddress32Nonce(addr common.Address32, nonce uint64) {
-	obj := s.getOrNewWideAccount(addr)
+	obj := s.getOrNewAddress32Account(addr)
 
 	if obj.data.Nonce == nonce {
 		return
 	}
 
-	s.journal.append(wideNonceChange{account: addr, prev: obj.data.Nonce})
+	s.journal.append(address32NonceChange{account: addr, prev: obj.data.Nonce})
 	obj.data.Nonce = nonce
 	obj.dirty = true
 }
 
-// commitWideAccounts writes dirty Address32 accounts into the account trie.
-func (s *StateDB) commitWideAccounts() {
-	if len(s.wideAccounts) == 0 || s.trie == nil {
+// commitAddress32Accounts writes dirty Address32 accounts into the account trie.
+func (s *StateDB) commitAddress32Accounts() {
+	if len(s.address32Accounts) == 0 || s.trie == nil {
 		return
 	}
 
@@ -149,7 +149,7 @@ func (s *StateDB) commitWideAccounts() {
 		return
 	}
 
-	for addr, obj := range s.wideAccounts {
+	for addr, obj := range s.address32Accounts {
 		if obj == nil || !obj.dirty {
 			continue
 		}
@@ -176,27 +176,27 @@ func AsStateDB(db any) *StateDB {
 	}
 }
 
-type wideCreateChange struct {
+type address32CreateChange struct {
 	account common.Address32
 }
 
-func (ch wideCreateChange) revert(s *StateDB) {
-	delete(s.wideAccounts, ch.account)
+func (ch address32CreateChange) revert(s *StateDB) {
+	delete(s.address32Accounts, ch.account)
 }
 
-func (ch wideCreateChange) dirtied() *common.Address { return nil }
+func (ch address32CreateChange) dirtied() *common.Address { return nil }
 
-func (ch wideCreateChange) copy() journalEntry {
-	return wideCreateChange{account: ch.account}
+func (ch address32CreateChange) copy() journalEntry {
+	return address32CreateChange{account: ch.account}
 }
 
-type wideBalanceChange struct {
+type address32BalanceChange struct {
 	account common.Address32
 	prev    *uint256.Int
 }
 
-func (ch wideBalanceChange) revert(s *StateDB) {
-	obj := s.liveWide(ch.account)
+func (ch address32BalanceChange) revert(s *StateDB) {
+	obj := s.liveAddress32(ch.account)
 	if obj == nil {
 		return
 	}
@@ -204,19 +204,19 @@ func (ch wideBalanceChange) revert(s *StateDB) {
 	obj.dirty = true
 }
 
-func (ch wideBalanceChange) dirtied() *common.Address { return nil }
+func (ch address32BalanceChange) dirtied() *common.Address { return nil }
 
-func (ch wideBalanceChange) copy() journalEntry {
-	return wideBalanceChange{account: ch.account, prev: ch.prev.Clone()}
+func (ch address32BalanceChange) copy() journalEntry {
+	return address32BalanceChange{account: ch.account, prev: ch.prev.Clone()}
 }
 
-type wideNonceChange struct {
+type address32NonceChange struct {
 	account common.Address32
 	prev    uint64
 }
 
-func (ch wideNonceChange) revert(s *StateDB) {
-	obj := s.liveWide(ch.account)
+func (ch address32NonceChange) revert(s *StateDB) {
+	obj := s.liveAddress32(ch.account)
 
 	if obj == nil {
 		return
@@ -226,8 +226,8 @@ func (ch wideNonceChange) revert(s *StateDB) {
 	obj.dirty = true
 }
 
-func (ch wideNonceChange) dirtied() *common.Address { return nil }
+func (ch address32NonceChange) dirtied() *common.Address { return nil }
 
-func (ch wideNonceChange) copy() journalEntry {
-	return wideNonceChange{account: ch.account, prev: ch.prev}
+func (ch address32NonceChange) copy() journalEntry {
+	return address32NonceChange{account: ch.account, prev: ch.prev}
 }

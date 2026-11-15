@@ -29,39 +29,39 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
-func TestPaddedWordWarmsSameLegacyAccount(t *testing.T) {
-	legacy := common.HexToAddress("0x2222222222222222222222222222222222222222")
+func TestPaddedWordWarmsSameAddress20(t *testing.T) {
+	address20 := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	var padded [32]byte
-	copy(padded[12:], legacy[:])
+	copy(padded[12:], address20[:])
 
 	fromEntry := newAccessTestState(t)
-	fromEntry.AddAddressToAccessList(legacy)
+	fromEntry.AddAddressToAccessList(address20)
 
-	if !fromEntry.AddressInAccessList(legacy) {
-		t.Fatal("20-byte access-list entry did not warm the legacy account")
+	if !fromEntry.AddressInAccessList(address20) {
+		t.Fatal("20-byte access-list entry did not warm the address20")
 	}
 
 	fromWord := newAccessTestState(t)
 
-	if err := fromWord.AddLegacyAccessPreimage(padded[:]); err != nil {
+	if err := fromWord.AddAddress20AccessPreimage(padded[:]); err != nil {
 		t.Fatal(err)
 	}
 
-	if !fromWord.AddressInAccessList(legacy) {
-		t.Fatal("zero-padded 32-byte word did not warm the legacy account")
+	if !fromWord.AddressInAccessList(address20) {
+		t.Fatal("zero-padded 32-byte word did not warm the address20")
 	}
 
-	wide := bytes.Repeat([]byte{0x11}, 32)
+	address32 := bytes.Repeat([]byte{0x11}, 32)
 
-	if err := fromWord.AddLegacyAccessPreimage(wide); err == nil {
-		t.Fatal("wide word warmed a legacy account")
+	if err := fromWord.AddAddress20AccessPreimage(address32); err == nil {
+		t.Fatal("address32 word warmed an address20")
 	}
 }
 
-func TestPaddedAccessListEntryWarmsSameLegacyAccount(t *testing.T) {
-	const legacyHex = "0x2222222222222222222222222222222222222222"
+func TestPaddedAccessListEntryWarmsSameAddress20(t *testing.T) {
+	const address20Hex = "0x2222222222222222222222222222222222222222"
 	const paddedHex = "0x0000000000000000000000002222222222222222222222222222222222222222"
-	raw := `[{"address":"` + legacyHex + `","storageKeys":[]},{"address":"` + paddedHex + `","storageKeys":[]}]`
+	raw := `[{"address":"` + address20Hex + `","storageKeys":[]},{"address":"` + paddedHex + `","storageKeys":[]}]`
 
 	var list types.AccessList
 
@@ -69,23 +69,23 @@ func TestPaddedAccessListEntryWarmsSameLegacyAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	legacy := common.HexToAddress(legacyHex)
+	address20 := common.HexToAddress(address20Hex)
 
-	if list[0].Address != legacy || list[1].Address != legacy {
-		t.Fatalf("access list addresses = %x and %x, want %x", list[0].Address, list[1].Address, legacy)
+	if list[0].Address != address20 || list[1].Address != address20 {
+		t.Fatalf("access list addresses = %x and %x, want %x", list[0].Address, list[1].Address, address20)
 	}
 
 	statedb := newAccessTestState(t)
 	statedb.Prepare(params.Rules{IsEIP2929: true}, common.Address{}, common.Address{}, nil, nil, list)
 
-	if !statedb.AddressInAccessList(legacy) {
-		t.Fatal("access list did not warm the legacy account")
+	if !statedb.AddressInAccessList(address20) {
+		t.Fatal("access list did not warm the address20")
 	}
 
-	wide := `[{"address":"0x1111111111111111111111111111111111111111111111111111111111111111","storageKeys":[]}]`
+	address32 := `[{"address":"0x1111111111111111111111111111111111111111111111111111111111111111","storageKeys":[]}]`
 
-	if err := json.Unmarshal([]byte(wide), &list); !errors.Is(err, types.ErrAccessListWideAddress) {
-		t.Fatalf("wide access-list entry error = %v, want ErrAccessListWideAddress", err)
+	if err := json.Unmarshal([]byte(address32), &list); !errors.Is(err, types.ErrAccessListAddress32) {
+		t.Fatalf("address32 access-list entry error = %v, want ErrAccessListAddress32", err)
 	}
 }
 

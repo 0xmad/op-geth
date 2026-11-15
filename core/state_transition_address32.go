@@ -71,12 +71,12 @@ func address32TransactionToMessage(tx *types.Transaction, signer types.Signer, b
 		},
 	}
 
-	if legacy, ok := from.Legacy(); ok {
-		msg.From = legacy
+	if address20, ok := from.Address20(); ok {
+		msg.From = address20
 	}
 
-	if legacyTo := tx.To(); legacyTo != nil {
-		msg.To = legacyTo
+	if address20To := tx.To(); address20To != nil {
+		msg.To = address20To
 	}
 
 	if baseFee != nil {
@@ -320,7 +320,7 @@ func payAddress32Fees(evm *vm.EVM, statedb *state.StateDB, msg *Message, rules p
 	return nil
 }
 
-// accountBalance reads and writes one legacy account or one Address32.
+// accountBalance reads and writes one address20 or one Address32.
 type accountBalance struct {
 	db   *state.StateDB
 	addr common.StateAddress
@@ -339,12 +339,12 @@ func (a accountBalance) code() []byte {
 }
 
 func (a accountBalance) label() string {
-	if legacy, ok := a.addr.Legacy(); ok {
-		return legacy.Hex()
+	if address20, ok := a.addr.Address20(); ok {
+		return address20.Hex()
 	}
 
-	wide, _ := a.addr.Address32()
-	return wide.Hex()
+	address32, _ := a.addr.Address32()
+	return address32.Hex()
 }
 
 func (a accountBalance) checkNonce(nonce uint64) error {
@@ -361,14 +361,14 @@ func (a accountBalance) checkNonce(nonce uint64) error {
 	return nil
 }
 
-func (a accountBalance) use(legacy func(common.Address), wide func(common.Address32)) {
-	if addr, ok := a.addr.Legacy(); ok {
-		legacy(addr)
+func (a accountBalance) use(address20 func(common.Address), address32 func(common.Address32)) {
+	if addr, ok := a.addr.Address20(); ok {
+		address20(addr)
 		return
 	}
 
 	addr, _ := a.addr.Address32()
-	wide(addr)
+	address32(addr)
 }
 
 func (a accountBalance) setNonce(nonce uint64) {

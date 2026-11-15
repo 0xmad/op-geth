@@ -32,7 +32,7 @@ import (
 	"github.com/holiman/uint256"
 )
 
-func TestValidateAddress32WideSenderState(t *testing.T) {
+func TestValidateAddress32SenderState(t *testing.T) {
 	key, err := crypto.HexToECDSA("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
 
 	if err != nil {
@@ -43,7 +43,7 @@ func TestValidateAddress32WideSenderState(t *testing.T) {
 	ts := uint64(0)
 	cfg.Address32Time = &ts
 	signer := types.LatestSigner(&cfg)
-	wide, err := crypto.PubkeyToAddress32(key.PublicKey)
+	address32, err := crypto.PubkeyToAddress32(key.PublicKey)
 
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestValidateAddress32WideSenderState(t *testing.T) {
 		Gas:        params.TxGas,
 		To:         word,
 		Value:      big.NewInt(1),
-		SenderKind: types.SenderKindWide,
+		SenderKind: types.SenderKindAddress32,
 	}), signer, key)
 
 	if err != nil {
@@ -72,7 +72,7 @@ func TestValidateAddress32WideSenderState(t *testing.T) {
 	}
 
 	funded := newAddress32State(t)
-	funded.AddAddress32Balance(wide, uint256.MustFromBig(big.NewInt(params.Ether)))
+	funded.AddAddress32Balance(address32, uint256.MustFromBig(big.NewInt(params.Ether)))
 	opts := &ValidationOptionsWithState{
 		State:               funded,
 		ExistingExpenditure: func(common.Address) *big.Int { return new(big.Int) },
@@ -86,7 +86,7 @@ func TestValidateAddress32WideSenderState(t *testing.T) {
 	opts.State = newAddress32State(t)
 
 	if err := ValidateTransactionWithState(signed, signer, opts); !errors.Is(err, core.ErrInsufficientFunds) {
-		t.Fatalf("empty wide sender error = %v", err)
+		t.Fatalf("empty address32 sender error = %v", err)
 	}
 }
 

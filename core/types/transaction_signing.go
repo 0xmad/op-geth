@@ -167,10 +167,10 @@ func Sender(signer Signer, tx *Transaction) (common.Address, error) {
 }
 
 // SenderAccount returns the account that signed tx.
-// A type 0x05 transaction spends the legacy account when its sender kind is 0
-// and the Address32 when its sender kind is 1. A wide sender whose word has
+// A type 0x05 transaction spends the address20 when its sender kind is 0
+// and the address32 when its sender kind is 1. An address32 sender whose word has
 // 12 leading zero bytes is invalid. Every other transaction type returns the
-// legacy sender.
+// address20 sender.
 func SenderAccount(signer Signer, tx *Transaction) (common.StateAddress, error) {
 	if tx.Type() != Address32TxType {
 		addr, err := Sender(signer, tx)
@@ -179,7 +179,7 @@ func SenderAccount(signer Signer, tx *Transaction) (common.StateAddress, error) 
 			return common.StateAddress{}, err
 		}
 
-		return common.LegacyStateAddress(addr), nil
+		return common.Address20StateAddress(addr), nil
 	}
 
 	ms, ok := signer.(*modernSigner)
@@ -198,7 +198,7 @@ func SenderAccount(signer Signer, tx *Transaction) (common.StateAddress, error) 
 		return common.StateAddress{}, ErrTxTypeNotSupported
 	}
 
-	if inner.SenderKind != SenderKindLegacy && inner.SenderKind != SenderKindWide {
+	if inner.SenderKind != SenderKindAddress20 && inner.SenderKind != SenderKindAddress32 {
 		return common.StateAddress{}, ErrInvalidSenderKind
 	}
 
@@ -216,17 +216,17 @@ func SenderAccount(signer Signer, tx *Transaction) (common.StateAddress, error) 
 		return common.StateAddress{}, err
 	}
 
-	if inner.SenderKind == SenderKindLegacy {
-		return common.LegacyStateAddress(crypto.PubkeyToAddress(*key)), nil
+	if inner.SenderKind == SenderKindAddress20 {
+		return common.Address20StateAddress(crypto.PubkeyToAddress(*key)), nil
 	}
 
-	wideWord := crypto.Keccak256(append([]byte{0x01}, pub[1:]...))
+	address32Word := crypto.Keccak256(append([]byte{0x01}, pub[1:]...))
 
-	return address32Sender(wideWord)
+	return address32Sender(address32Word)
 }
 
-// address32Sender names the wide account in word.
-// A word with 12 leading zero bytes is the legacy subspace and is rejected.
+// address32Sender names the address32 in word.
+// A word with 12 leading zero bytes is the address20 subspace and is rejected.
 func address32Sender(word []byte) (common.StateAddress, error) {
 	addr, err := common.NewAddress32(word)
 
@@ -234,7 +234,7 @@ func address32Sender(word []byte) (common.StateAddress, error) {
 		return common.StateAddress{}, err
 	}
 
-	return common.WideStateAddress(addr), nil
+	return common.Address32StateAddress(addr), nil
 }
 
 func recoverPublicKey(sighash common.Hash, R, S, Vb *big.Int, homestead bool) ([]byte, error) {
@@ -402,13 +402,13 @@ func (s *modernSigner) Sender(tx *Transaction) (common.Address, error) {
 			return common.Address{}, err
 		}
 
-		legacy, ok := account.Legacy()
+		address20, ok := account.Address20()
 
 		if !ok {
-			return common.Address{}, errors.New("wide sender has no 20-byte address")
+			return common.Address{}, errors.New("address32 sender has no address20")
 		}
 
-		return legacy, nil
+		return address20, nil
 	}
 	// 'modern' txs are defined to use 0 and 1 as their recovery
 	// id, add 27 to become equivalent to unprotected Homestead signatures.

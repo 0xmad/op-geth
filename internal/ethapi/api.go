@@ -327,7 +327,7 @@ func (api *BlockChainAPI) BlockNumber() hexutil.Uint64 {
 // historicalAccount reports whether this account read belongs to the
 // pre-bedrock historical backend. An Address32 exists only in local state.
 func historicalAccount(cfg *params.ChainConfig, number *big.Int, address common.StateAddress) bool {
-	_, ok := address.Legacy()
+	_, ok := address.Address20()
 	return ok && cfg.IsOptimismPreBedrock(number)
 }
 
@@ -1292,8 +1292,8 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 				result.FromWord = word
 			}
 
-			if legacy, ok := account.Legacy(); ok {
-				result.From = legacy
+			if address20, ok := account.Address20(); ok {
+				result.From = address20
 			}
 		}
 
@@ -1704,9 +1704,9 @@ func (api *TransactionAPI) GetRawTransactionByBlockHashAndIndex(ctx context.Cont
 func (api *TransactionAPI) GetTransactionCount(ctx context.Context, address common.StateAddress, blockNrOrHash rpc.BlockNumberOrHash) (*hexutil.Uint64, error) {
 	// Ask transaction pool for the nonce which includes pending transactions.
 	// The pool keys accounts by the 20-byte address.
-	if legacy, ok := address.Legacy(); ok {
+	if address20, ok := address.Address20(); ok {
 		if blockNr, ok := blockNrOrHash.Number(); ok && blockNr == rpc.PendingBlockNumber {
-			nonce, err := api.b.GetPoolNonce(ctx, legacy)
+			nonce, err := api.b.GetPoolNonce(ctx, address20)
 
 			if err != nil {
 				return nil, err

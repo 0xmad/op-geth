@@ -216,7 +216,7 @@ func (t *StateTrie) UpdateAccount(address common.Address, acc *types.StateAccoun
 }
 
 // UpdateAccountPreimage writes an account under keccak256(preimage).
-// A legacy account passes its 20-byte address. A wide account passes its
+// An address20 passes its 20-byte address. An address32 passes its
 // 32-byte word. The two preimages do not share a trie key.
 func (t *StateTrie) UpdateAccountPreimage(preimage []byte, acc *types.StateAccount) error {
 	hk := crypto.Keccak256(preimage)

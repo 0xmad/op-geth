@@ -52,7 +52,7 @@ func (g Genesis) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if g.Alloc != nil || len(g.WideAlloc) > 0 {
+	if g.Alloc != nil || len(g.Address32Alloc) > 0 {
 		enc.Alloc = rawAlloc
 	}
 	enc.Number = math.HexOrDecimal64(g.Number)
@@ -122,8 +122,8 @@ func (g *Genesis) UnmarshalJSON(input []byte) error {
 	if err != nil {
 		return err
 	}
-	g.Alloc = accounts.Legacy
-	g.WideAlloc = accounts.Wide
+	g.Alloc = accounts.Address20
+	g.Address32Alloc = accounts.Address32
 	if dec.Number != nil {
 		g.Number = uint64(*dec.Number)
 	}
@@ -145,7 +145,7 @@ func (g *Genesis) UnmarshalJSON(input []byte) error {
 	if dec.StateHash != nil {
 		g.StateHash = dec.StateHash
 	}
-	if err := g.checkWideAlloc(); err != nil {
+	if err := g.checkAddress32Alloc(); err != nil {
 		return err
 	}
 	return nil

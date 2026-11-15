@@ -29,10 +29,10 @@ import (
 // Address32Length is the expected length of an Address32.
 const Address32Length = 32
 
-// ErrAddress32LegacySubspace is returned when a wide address has its top 12
+// ErrAddress32InAddress20Subspace is returned when an address32 has its top 12
 // bytes clear. That subspace is the 20-byte address, and an Address32 is not
 // one of those.
-var ErrAddress32LegacySubspace = errors.New("address32 falls in the legacy address subspace")
+var ErrAddress32InAddress20Subspace = errors.New("address32 falls in the address20 subspace")
 
 // Address32 is a 32-byte account identifier. It is not a hash and not a
 // 20-byte address.
@@ -45,8 +45,8 @@ func NewAddress32(b []byte) (Address32, error) {
 		return Address32{}, errors.New("address32 must be 32 bytes")
 	}
 
-	if address32InLegacySubspace(b) {
-		return Address32{}, ErrAddress32LegacySubspace
+	if address32InAddress20Subspace(b) {
+		return Address32{}, ErrAddress32InAddress20Subspace
 	}
 
 	var out Address32
@@ -95,7 +95,7 @@ func (a Address32) EncodeRLP(w io.Writer) error {
 }
 
 // DecodeRLP reads a fixed 32-byte RLP string. A shorter string is rejected,
-// so leading zeros cannot be reconstructed by padding. A value in the legacy
+// so leading zeros cannot be reconstructed by padding. A value in the address20
 // subspace is rejected.
 func (a *Address32) DecodeRLP(s *rlp.Stream) error {
 	b, err := s.Bytes()
@@ -115,7 +115,7 @@ func (a *Address32) DecodeRLP(s *rlp.Stream) error {
 	return nil
 }
 
-func address32InLegacySubspace(b []byte) bool {
+func address32InAddress20Subspace(b []byte) bool {
 	for _, c := range b[:12] {
 		if c != 0 {
 			return false
@@ -125,18 +125,18 @@ func address32InLegacySubspace(b []byte) bool {
 	return true
 }
 
-// LegacyAddressOf returns the legacy account named by preimage.
+// Address20Of returns the address20 named by preimage.
 // A 20-byte preimage is that account. A 32-byte preimage names it only when
 // the top 12 bytes are zero; the account is the low 20 bytes. Any other
 // width, including an Address32, returns false.
-func LegacyAddressOf(preimage []byte) (Address, bool) {
+func Address20Of(preimage []byte) (Address, bool) {
 	switch len(preimage) {
 	case AddressLength:
 		var addr Address
 		copy(addr[:], preimage)
 		return addr, true
 	case Address32Length:
-		if !address32InLegacySubspace(preimage) {
+		if !address32InAddress20Subspace(preimage) {
 			return Address{}, false
 		}
 

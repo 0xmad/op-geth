@@ -27,10 +27,10 @@ import (
 
 //go:generate go run github.com/fjl/gencodec -type AccessTuple -out gen_access_tuple.go
 
-// ErrAccessListWideAddress is returned when an access-list entry names an
+// ErrAccessListAddress32 is returned when an access-list entry names an
 // Address32. A 20-byte entry and the same account left-padded to 32 bytes are
-// the legacy account, and they do not return this error.
-var ErrAccessListWideAddress = errors.New("access-list entry is not a legacy account")
+// the address20, and they do not return this error.
+var ErrAccessListAddress32 = errors.New("access-list entry is not an address20")
 
 // AccessList is an EIP-2930 access list.
 type AccessList []AccessTuple

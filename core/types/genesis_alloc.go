@@ -25,15 +25,15 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// GenesisAccounts is one genesis alloc: the legacy accounts and the Address32
+// GenesisAccounts is one genesis alloc: the address20 accounts and the address32
 // accounts. Callers pass this instead of the two maps.
 type GenesisAccounts struct {
-	Legacy GenesisAlloc
-	Wide   map[common.Address32]Account
+	Address20 GenesisAlloc
+	Address32 map[common.Address32]Account
 }
 
-// ParseGenesisAlloc decodes a genesis alloc object. A key of 20 bytes is a
-// legacy account. A key of 32 bytes is an Address32, and one whose top 12
+// ParseGenesisAlloc decodes a genesis alloc object. A key of 20 bytes is an
+// address20. A key of 32 bytes is an address32, and one whose top 12
 // bytes are zero is rejected. The 0x prefix is optional.
 func ParseGenesisAlloc(data []byte) (GenesisAccounts, error) {
 	var raw map[string]Account
@@ -42,8 +42,8 @@ func ParseGenesisAlloc(data []byte) (GenesisAccounts, error) {
 		return GenesisAccounts{}, err
 	}
 
-	legacy := make(GenesisAlloc, len(raw))
-	var wide map[common.Address32]Account
+	address20 := make(GenesisAlloc, len(raw))
+	var address32 map[common.Address32]Account
 
 	for key, account := range raw {
 		decoded, err := decodeAllocKey(key)
@@ -56,7 +56,7 @@ func ParseGenesisAlloc(data []byte) (GenesisAccounts, error) {
 		case common.AddressLength:
 			var addr common.Address
 			copy(addr[:], decoded)
-			legacy[addr] = account
+			address20[addr] = account
 		case common.Address32Length:
 			addr, err := common.NewAddress32(decoded)
 
@@ -64,35 +64,35 @@ func ParseGenesisAlloc(data []byte) (GenesisAccounts, error) {
 				return GenesisAccounts{}, fmt.Errorf("genesis alloc key %s: %w", key, err)
 			}
 
-			if wide == nil {
-				wide = make(map[common.Address32]Account)
+			if address32 == nil {
+				address32 = make(map[common.Address32]Account)
 			}
 
-			wide[addr] = account
+			address32[addr] = account
 		default:
 			return GenesisAccounts{}, fmt.Errorf("genesis alloc key %s: want 20 or 32 bytes, have %d", key, len(decoded))
 		}
 	}
 
-	return GenesisAccounts{Legacy: legacy, Wide: wide}, nil
+	return GenesisAccounts{Address20: address20, Address32: address32}, nil
 }
 
-// MarshalGenesisAlloc encodes legacy and wide genesis accounts as one alloc
-// object. Keys are unprefixed hex, 40 digits for a legacy account and 64
-// digits for an Address32. A nil legacy map and no wide accounts encode as
+// MarshalGenesisAlloc encodes address20 and address32 genesis accounts as one alloc
+// object. Keys are unprefixed hex, 40 digits for an address20 and 64
+// digits for an Address32. A nil address20 map and no address32 accounts encode as
 // JSON null.
 func MarshalGenesisAlloc(accounts GenesisAccounts) ([]byte, error) {
-	if accounts.Legacy == nil && len(accounts.Wide) == 0 {
+	if accounts.Address20 == nil && len(accounts.Address32) == 0 {
 		return []byte("null"), nil
 	}
 
-	out := make(map[string]Account, len(accounts.Legacy)+len(accounts.Wide))
+	out := make(map[string]Account, len(accounts.Address20)+len(accounts.Address32))
 
-	for addr, account := range accounts.Legacy {
+	for addr, account := range accounts.Address20 {
 		out[hex.EncodeToString(addr[:])] = account
 	}
 
-	for addr, account := range accounts.Wide {
+	for addr, account := range accounts.Address32 {
 		out[hex.EncodeToString(addr[:])] = account
 	}
 

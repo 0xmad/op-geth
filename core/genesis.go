@@ -47,9 +47,9 @@ import (
 
 var errGenesisNoConfig = errors.New("genesis has no chain configuration")
 
-// errWideGenesisRequiresAddress32 is returned when a genesis alloc contains an
+// errAddress32GenesisRequiresFork is returned when a genesis alloc contains an
 // Address32 and Address32Time is unset at the genesis timestamp.
-var errWideGenesisRequiresAddress32 = errors.New("wide genesis account requires Address32")
+var errAddress32GenesisRequiresFork = errors.New("address32 genesis account requires Address32")
 
 // Deprecated: use types.Account instead.
 type GenesisAccount = types.Account
@@ -70,9 +70,9 @@ type Genesis struct {
 	Coinbase   common.Address      `json:"coinbase"`
 	Alloc      types.GenesisAlloc  `json:"alloc" gencodec:"required"`
 
-	// WideAlloc is the Address32 half of alloc. Both halves are encoded in the
+	// Address32Alloc is the Address32 half of alloc. Both halves are encoded in the
 	// alloc JSON object; a 32-byte key is stored here.
-	WideAlloc map[common.Address32]types.Account `json:"-"`
+	Address32Alloc map[common.Address32]types.Account `json:"-"`
 
 	// These fields are used for consensus tests. Please don't use them
 	// in actual genesis blocks.
@@ -117,8 +117,8 @@ func ReadGenesis(db ethdb.Database) (*Genesis, error) {
 		if err != nil {
 			return nil, fmt.Errorf("could not unmarshal genesis state json: %s", err)
 		}
-		genesis.Alloc = accounts.Legacy
-		genesis.WideAlloc = accounts.Wide
+		genesis.Alloc = accounts.Address20
+		genesis.Address32Alloc = accounts.Address32
 	}
 	genesis.Config = rawdb.ReadChainConfig(db, stored)
 	if genesis.Config == nil {
@@ -140,12 +140,12 @@ func ReadGenesis(db ethdb.Database) (*Genesis, error) {
 	genesis.ExcessBlobGas = genesisHeader.ExcessBlobGas
 	genesis.BlobGasUsed = genesisHeader.BlobGasUsed
 	// A nil or empty alloc, with a non-matching state-root in the block header, intents to override the state-root.
-	noAccounts := len(genesis.Alloc) == 0 && len(genesis.WideAlloc) == 0
+	noAccounts := len(genesis.Alloc) == 0 && len(genesis.Address32Alloc) == 0
 	if noAccounts && (genesis.Alloc == nil || genesisHeader.Root != types.EmptyRootHash) {
 		h := genesisHeader.Root // the genesis block is encoded as RLP in the DB and will contain the state-root
 		genesis.StateHash = &h
 		genesis.Alloc = nil
-		genesis.WideAlloc = nil
+		genesis.Address32Alloc = nil
 	}
 
 	return &genesis, nil
@@ -177,7 +177,7 @@ func hashAlloc(accounts types.GenesisAccounts, isVerkle, isIsthmus bool) (common
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
-	for addr, account := range accounts.Legacy {
+	for addr, account := range accounts.Address20 {
 		if account.Balance != nil {
 			statedb.AddBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceIncreaseGenesisBalance)
 		}
@@ -192,7 +192,7 @@ func hashAlloc(accounts types.GenesisAccounts, isVerkle, isIsthmus bool) (common
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
-	stateRoot, err = insertWideAlloc(stateRoot, statedb.Database().TrieDB(), accounts.Wide)
+	stateRoot, err = insertAddress32Alloc(stateRoot, statedb.Database().TrieDB(), accounts.Address32)
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
@@ -217,7 +217,7 @@ func flushAlloc(accounts types.GenesisAccounts, triedb *triedb.Database, isIsthm
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
-	for addr, account := range accounts.Legacy {
+	for addr, account := range accounts.Address20 {
 		if account.Balance != nil {
 			// This is not actually logged via tracer because OnGenesisBlock
 			// already captures the allocations.
@@ -233,7 +233,7 @@ func flushAlloc(accounts types.GenesisAccounts, triedb *triedb.Database, isIsthm
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
-	root, err = insertWideAlloc(root, triedb, accounts.Wide)
+	root, err = insertAddress32Alloc(root, triedb, accounts.Address32)
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
@@ -258,7 +258,7 @@ func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc types.Gene
 		if err != nil {
 			return nil, err
 		}
-		return accounts.Legacy, nil
+		return accounts.Address20, nil
 	}
 
 	// Genesis allocation is missing and there are several possibilities:
@@ -625,28 +625,28 @@ func (g *Genesis) IsVerkle() bool {
 	return g.Config.IsVerkleGenesis()
 }
 
-// accounts is the legacy and Address32 halves of this genesis alloc.
+// accounts is the address20 and address32 halves of this genesis alloc.
 func (g *Genesis) accounts() types.GenesisAccounts {
 	if g == nil {
 		return types.GenesisAccounts{}
 	}
 
-	return types.GenesisAccounts{Legacy: g.Alloc, Wide: g.WideAlloc}
+	return types.GenesisAccounts{Address20: g.Alloc, Address32: g.Address32Alloc}
 }
 
-// checkWideAlloc rejects an Address32 genesis account when the fork is off
+// checkAddress32Alloc rejects an Address32 genesis account when the fork is off
 // or the state is a verkle trie.
-func (g *Genesis) checkWideAlloc() error {
-	if g == nil || len(g.WideAlloc) == 0 {
+func (g *Genesis) checkAddress32Alloc() error {
+	if g == nil || len(g.Address32Alloc) == 0 {
 		return nil
 	}
 
 	if g.Config == nil || !g.Config.IsAddress32(g.Timestamp) {
-		return errWideGenesisRequiresAddress32
+		return errAddress32GenesisRequiresFork
 	}
 
 	if g.IsVerkle() {
-		return errors.New("wide genesis accounts are not supported in a verkle state")
+		return errors.New("address32 genesis accounts are not supported in a verkle state")
 	}
 
 	return nil
@@ -654,13 +654,13 @@ func (g *Genesis) checkWideAlloc() error {
 
 // ToBlock returns the genesis block according to genesis specification.
 func (g *Genesis) ToBlock() *types.Block {
-	if err := g.checkWideAlloc(); err != nil {
+	if err := g.checkAddress32Alloc(); err != nil {
 		panic(err)
 	}
 	var stateRoot, storageRootMessagePasser common.Hash
 	var err error
 	if g.StateHash != nil {
-		if len(g.Alloc) > 0 || len(g.WideAlloc) > 0 {
+		if len(g.Alloc) > 0 || len(g.Address32Alloc) > 0 {
 			panic(fmt.Errorf("cannot both have genesis hash %s "+
 				"and non-empty state-allocation", *g.StateHash))
 		}
@@ -765,7 +765,7 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 	if err := config.CheckConfigForkOrder(); err != nil {
 		return nil, err
 	}
-	if err := g.checkWideAlloc(); err != nil {
+	if err := g.checkAddress32Alloc(); err != nil {
 		return nil, err
 	}
 	if config.Clique != nil && len(g.ExtraData) < 32+crypto.SignatureLength {
@@ -773,7 +773,7 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 	}
 	var stateRoot, storageRootMessagePasser common.Hash
 	var err error
-	if len(g.Alloc) == 0 && len(g.WideAlloc) == 0 {
+	if len(g.Alloc) == 0 && len(g.Address32Alloc) == 0 {
 		if g.StateHash == nil {
 			stateRoot = types.EmptyRootHash // default to the hash of the empty state. Some unit-tests rely on this.
 		} else {
