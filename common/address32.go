@@ -125,6 +125,29 @@ func address32InLegacySubspace(b []byte) bool {
 	return true
 }
 
+// LegacyAddressOf returns the legacy account named by preimage.
+// A 20-byte preimage is that account. A 32-byte preimage names it only when
+// the top 12 bytes are zero; the account is the low 20 bytes. Any other
+// width, including an Address32, returns false.
+func LegacyAddressOf(preimage []byte) (Address, bool) {
+	switch len(preimage) {
+	case AddressLength:
+		var addr Address
+		copy(addr[:], preimage)
+		return addr, true
+	case Address32Length:
+		if !address32InLegacySubspace(preimage) {
+			return Address{}, false
+		}
+
+		var addr Address
+		copy(addr[:], preimage[12:])
+		return addr, true
+	default:
+		return Address{}, false
+	}
+}
+
 // eip55Hex applies EIP-55 checksum casing to raw. The hash covers every hex
 // character, so a 32-byte value is checksummed over all 64 digits.
 func eip55Hex(raw []byte) string {

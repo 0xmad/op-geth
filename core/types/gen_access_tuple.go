@@ -22,10 +22,14 @@ func (a AccessTuple) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON unmarshals from JSON.
+//
+// address accepts a 20-byte legacy account or the same account left-padded to
+// 32 bytes. An Address32 is rejected. Regenerating this file with gencodec
+// drops that and rejects the padded word.
 func (a *AccessTuple) UnmarshalJSON(input []byte) error {
 	type AccessTuple struct {
-		Address     *common.Address `json:"address"     gencodec:"required"`
-		StorageKeys []common.Hash   `json:"storageKeys" gencodec:"required"`
+		Address     *common.StateAddress `json:"address"     gencodec:"required"`
+		StorageKeys []common.Hash        `json:"storageKeys" gencodec:"required"`
 	}
 	var dec AccessTuple
 	if err := json.Unmarshal(input, &dec); err != nil {
@@ -34,7 +38,11 @@ func (a *AccessTuple) UnmarshalJSON(input []byte) error {
 	if dec.Address == nil {
 		return errors.New("missing required field 'address' for AccessTuple")
 	}
-	a.Address = *dec.Address
+	legacy, ok := dec.Address.Legacy()
+	if !ok {
+		return ErrAccessListWideAddress
+	}
+	a.Address = legacy
 	if dec.StorageKeys == nil {
 		return errors.New("missing required field 'storageKeys' for AccessTuple")
 	}

@@ -212,7 +212,14 @@ func (t *StateTrie) UpdateStorage(_ common.Address, key, value []byte) error {
 
 // UpdateAccount will abstract the write of an account to the secure trie.
 func (t *StateTrie) UpdateAccount(address common.Address, acc *types.StateAccount, _ int) error {
-	hk := crypto.Keccak256(address.Bytes())
+	return t.UpdateAccountPreimage(address.Bytes(), acc)
+}
+
+// UpdateAccountPreimage writes an account under keccak256(preimage).
+// A legacy account passes its 20-byte address. A wide account passes its
+// 32-byte word. The two preimages do not share a trie key.
+func (t *StateTrie) UpdateAccountPreimage(preimage []byte, acc *types.StateAccount) error {
+	hk := crypto.Keccak256(preimage)
 	data, err := rlp.EncodeToBytes(acc)
 	if err != nil {
 		return err
@@ -221,7 +228,7 @@ func (t *StateTrie) UpdateAccount(address common.Address, acc *types.StateAccoun
 		return err
 	}
 	if t.preimages != nil {
-		t.secKeyCache[common.Hash(hk)] = address.Bytes()
+		t.secKeyCache[common.Hash(hk)] = common.CopyBytes(preimage)
 	}
 	return nil
 }

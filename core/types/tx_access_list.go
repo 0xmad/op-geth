@@ -18,6 +18,7 @@ package types
 
 import (
 	"bytes"
+	"errors"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -25,6 +26,11 @@ import (
 )
 
 //go:generate go run github.com/fjl/gencodec -type AccessTuple -out gen_access_tuple.go
+
+// ErrAccessListWideAddress is returned when an access-list entry names an
+// Address32. A 20-byte entry and the same account left-padded to 32 bytes are
+// the legacy account, and they do not return this error.
+var ErrAccessListWideAddress = errors.New("access-list entry is not a legacy account")
 
 // AccessList is an EIP-2930 access list.
 type AccessList []AccessTuple
