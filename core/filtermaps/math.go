@@ -91,11 +91,11 @@ func (p *Params) deriveFields() {
 	p.baseRowLength = uint32(p.valuesPerMap * uint64(p.baseRowLengthRatio) / uint64(p.mapHeight))
 }
 
-// addressValue returns the log value hash of a log emitting address.
-func addressValue(address common.Address) common.Hash {
+// logAddressValue returns the log value hash of the account that emitted the log.
+func logAddressValue(logger []byte) common.Hash {
 	var result common.Hash
 	hasher := sha256.New()
-	hasher.Write(address[:])
+	hasher.Write(logger)
 	hasher.Sum(result[:0])
 	return result
 }

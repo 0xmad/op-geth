@@ -34,6 +34,9 @@ type Contract struct {
 	// address32 is set when this frame is an address32 account.
 	// A nil address32 is an address20 frame.
 	address32 *common.Address32
+	// caller32 is the caller when that caller is an address32.
+	// A nil caller32 means caller is the address20 in caller.
+	caller32 *common.Address32
 
 	jumpDests JumpDestCache // Aggregated result of JUMPDEST analysis.
 	analysis  BitVec        // Locally cached result of JUMPDEST analysis
@@ -171,6 +174,31 @@ func (c *Contract) Address32() (common.Address32, bool) {
 func (c *Contract) setAddress32(addr common.Address32) {
 	copied := addr
 	c.address32 = &copied
+}
+
+// Caller32 returns the caller when it is an address32.
+// ok is false when the caller is an address20.
+func (c *Contract) Caller32() (common.Address32, bool) {
+	if c == nil || c.caller32 == nil {
+		return common.Address32{}, false
+	}
+
+	return *c.caller32, true
+}
+
+// setCaller32 records an address32 caller.
+func (c *Contract) setCaller32(addr common.Address32) {
+	copied := addr
+	c.caller32 = &copied
+}
+
+// stateAddress is the account this frame executes as.
+func (c *Contract) stateAddress() common.StateAddress {
+	if addr, ok := c.Address32(); ok {
+		return common.Address32StateAddress(addr)
+	}
+
+	return common.Address20StateAddress(c.address)
 }
 
 // Value returns the contract's value (sent to it from it's caller)

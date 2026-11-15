@@ -37,8 +37,8 @@ import (
 type Filter struct {
 	sys *FilterSystem
 
-	addresses []common.Address
-	topics    [][]common.Hash
+	loggers types.Loggers
+	topics  [][]common.Hash
 
 	block      *common.Hash // Block hash if filtering a single block
 	begin, end int64        // Range interval if filtering multiple blocks
@@ -70,9 +70,9 @@ func (sys *FilterSystem) NewBlockFilter(block common.Hash, addresses []common.Ad
 // or based on range queries. The search criteria needs to be explicitly set.
 func newFilter(sys *FilterSystem, addresses []common.Address, topics [][]common.Hash) *Filter {
 	return &Filter{
-		sys:       sys,
-		addresses: addresses,
-		topics:    topics,
+		sys:     sys,
+		loggers: types.Loggers{Addresses: addresses},
+		topics:  topics,
 	}
 }
 
@@ -410,8 +410,8 @@ func (f *Filter) rangeLogs(ctx context.Context, firstBlock, lastBlock uint64) ([
 
 func (f *Filter) indexedLogs(ctx context.Context, mb filtermaps.MatcherBackend, begin, end uint64) ([]*types.Log, error) {
 	start := time.Now()
-	potentialMatches, err := filtermaps.GetPotentialMatches(ctx, mb, begin, end, f.addresses, f.topics)
-	matches := filterLogs(potentialMatches, nil, nil, f.addresses, f.topics)
+	potentialMatches, err := filtermaps.GetPotentialMatches(ctx, mb, begin, end, f.loggers, f.topics)
+	matches := filterLogs(potentialMatches, nil, nil, f.loggers, f.topics)
 	log.Trace("Performed indexed log search", "begin", begin, "end", end, "true matches", len(matches), "false positives", len(potentialMatches)-len(matches), "elapsed", common.PrettyDuration(time.Since(start)))
 	return matches, err
 }
@@ -449,7 +449,7 @@ func (f *Filter) unindexedLogs(ctx context.Context, chainView *filtermaps.ChainV
 
 // blockLogs returns the logs matching the filter criteria within a single block.
 func (f *Filter) blockLogs(ctx context.Context, header *types.Header) ([]*types.Log, error) {
-	if bloomFilter(header.Bloom, f.addresses, f.topics) {
+	if bloomFilter(header.Bloom, f.loggers, f.topics) {
 		return f.checkMatches(ctx, header)
 	}
 	return nil, nil
@@ -467,7 +467,7 @@ func (f *Filter) checkMatches(ctx context.Context, header *types.Header) ([]*typ
 	if err != nil {
 		return nil, err
 	}
-	logs := filterLogs(cached.logs, nil, nil, f.addresses, f.topics)
+	logs := filterLogs(cached.logs, nil, nil, f.loggers, f.topics)
 	if len(logs) == 0 {
 		return nil, nil
 	}
@@ -490,7 +490,7 @@ func (f *Filter) checkMatches(ctx context.Context, header *types.Header) ([]*typ
 }
 
 // filterLogs creates a slice of logs matching the given criteria.
-func filterLogs(logs []*types.Log, fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) []*types.Log {
+func filterLogs(logs []*types.Log, fromBlock, toBlock *big.Int, loggers types.Loggers, topics [][]common.Hash) []*types.Log {
 	var check = func(log *types.Log) bool {
 		if fromBlock != nil && fromBlock.Int64() >= 0 && fromBlock.Uint64() > log.BlockNumber {
 			return false
@@ -498,8 +498,14 @@ func filterLogs(logs []*types.Log, fromBlock, toBlock *big.Int, addresses []comm
 		if toBlock != nil && toBlock.Int64() >= 0 && toBlock.Uint64() < log.BlockNumber {
 			return false
 		}
-		if len(addresses) > 0 && !slices.Contains(addresses, log.Address) {
-			return false
+		if loggers.Listed() {
+			if log.Address32 != nil {
+				if !slices.Contains(loggers.Addresses32, *log.Address32) {
+					return false
+				}
+			} else if !slices.Contains(loggers.Addresses, log.Address) {
+				return false
+			}
 		}
 		// If the to filtered topics is greater than the amount of topics in logs, skip.
 		if len(topics) > len(log.Topics) {
@@ -524,13 +530,21 @@ func filterLogs(logs []*types.Log, fromBlock, toBlock *big.Int, addresses []comm
 	return ret
 }
 
-func bloomFilter(bloom types.Bloom, addresses []common.Address, topics [][]common.Hash) bool {
-	if len(addresses) > 0 {
+func bloomFilter(bloom types.Bloom, loggers types.Loggers, topics [][]common.Hash) bool {
+	if loggers.Listed() {
 		var included bool
-		for _, addr := range addresses {
+		for _, addr := range loggers.Addresses {
 			if types.BloomLookup(bloom, addr) {
 				included = true
 				break
+			}
+		}
+		if !included {
+			for _, addr := range loggers.Addresses32 {
+				if types.BloomLookup(bloom, addr) {
+					included = true
+					break
+				}
 			}
 		}
 		if !included {

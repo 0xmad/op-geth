@@ -937,14 +937,22 @@ func makeLog(size int) executionFunc {
 		}
 
 		d := scope.Memory.GetCopy(mStart.Uint64(), mSize.Uint64())
-		evm.StateDB.AddLog(&types.Log{
-			Address: scope.Contract.Address(),
-			Topics:  topics,
-			Data:    d,
+		log := &types.Log{
+			Topics: topics,
+			Data:   d,
 			// This is a non-consensus field, but assigned here because
 			// core/state doesn't know the current block number.
 			BlockNumber: evm.Context.BlockNumber.Uint64(),
-		})
+		}
+
+		if addr, ok := scope.Contract.Address32(); ok {
+			copied := addr
+			log.Address32 = &copied
+		} else {
+			log.Address = scope.Contract.Address()
+		}
+
+		evm.StateDB.AddLog(log)
 
 		return nil, nil
 	}

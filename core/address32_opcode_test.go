@@ -40,8 +40,8 @@ var (
 )
 
 func TestAddress32OpcodeBytes(t *testing.T) {
-	if vm.BALANCE32 != 0xa5 || vm.EXTCODESIZE32 != 0xa6 || vm.EXTCODECOPY32 != 0xa7 || vm.EXTCODEHASH32 != 0xa8 || vm.CALL32 != 0xa9 {
-		t.Fatalf("opcodes = %#x %#x %#x %#x %#x", vm.BALANCE32, vm.EXTCODESIZE32, vm.EXTCODECOPY32, vm.EXTCODEHASH32, vm.CALL32)
+	if vm.BALANCE32 != 0xa5 || vm.EXTCODESIZE32 != 0xa6 || vm.EXTCODECOPY32 != 0xa7 || vm.EXTCODEHASH32 != 0xa8 || vm.CALL32 != 0xa9 || vm.STATICCALL32 != 0xab {
+		t.Fatalf("opcodes = %#x %#x %#x %#x %#x %#x", vm.BALANCE32, vm.EXTCODESIZE32, vm.EXTCODECOPY32, vm.EXTCODEHASH32, vm.CALL32, vm.STATICCALL32)
 	}
 
 	if vm.CREATE32 != 0xac || vm.CREATE232 != 0xad {
@@ -441,7 +441,7 @@ func TestCall32WithValueInStaticCallIsWriteProtected(t *testing.T) {
 func TestAddress32OpcodesUnassignedBeforeFork(t *testing.T) {
 	cfg := optimismConfig()
 
-	for _, op := range []byte{0xa5, 0xa6, 0xa7, 0xa8, 0xa9} {
+	for _, op := range []byte{0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xab} {
 		run := runOpcode(t, cfg, []byte{op}, nil, nil)
 		var invalid *vm.ErrInvalidOpCode
 

@@ -750,7 +750,7 @@ func (l *logIterator) getValueHash() common.Hash {
 	}
 	log := l.receipts[l.txIndex].Logs[l.logIndex]
 	if l.topicIndex == 0 {
-		return addressValue(log.Address)
+		return logAddressValue(log.LoggerBytes())
 	}
 	return topicValue(log.Topics[l.topicIndex-1])
 }

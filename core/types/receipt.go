@@ -189,7 +189,7 @@ type LogForStorage Log
 
 // EncodeRLP implements rlp.Encoder.
 func (l *LogForStorage) EncodeRLP(w io.Writer) error {
-	rl := Log{Address: l.Address, Topics: l.Topics, Data: l.Data}
+	rl := Log{Address: l.Address, Address32: l.Address32, Topics: l.Topics, Data: l.Data}
 	return rlp.Encode(w, &rl)
 }
 
@@ -216,9 +216,10 @@ func (l *LogForStorage) DecodeRLP(s *rlp.Stream) error {
 	err = rlp.DecodeBytes(blob, &dec)
 	if err == nil {
 		*l = LogForStorage{
-			Address: dec.Address,
-			Topics:  dec.Topics,
-			Data:    dec.Data,
+			Address:   dec.Address,
+			Address32: dec.Address32,
+			Topics:    dec.Topics,
+			Data:      dec.Data,
 		}
 	} else {
 		// Try to decode log with previous definition.

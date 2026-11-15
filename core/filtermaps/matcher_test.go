@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 func TestMatcher(t *testing.T) {
@@ -68,7 +69,7 @@ func TestMatcher(t *testing.T) {
 			continue // cannot search for match-all pattern
 		}
 		mb := ts.fm.NewMatcherBackend()
-		logs, err := GetPotentialMatches(context.Background(), mb, 0, 1000, addresses, topics)
+		logs, err := GetPotentialMatches(context.Background(), mb, 0, 1000, types.Loggers{Addresses: addresses}, topics)
 		mb.Close()
 		if err != nil {
 			t.Fatalf("Log search error: %v", err)

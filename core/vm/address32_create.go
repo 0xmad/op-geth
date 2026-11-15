@@ -104,6 +104,7 @@ func (evm *EVM) createAddress32(db *state.StateDB, caller, address common.Addres
 
 	contract := NewContract(common.Address{}, common.Address{}, value, gas, evm.jumpDests)
 	contract.setAddress32(address)
+	contract.setCaller32(caller)
 	contract.SetCallCode(common.Hash{}, code)
 	contract.IsDeployment = true
 

@@ -156,6 +156,10 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 	}()
 	contract.Input = input
 
+	if _, ok := contract.Address32(); ok && evm.address32Table != nil {
+		jumpTable = evm.address32Table
+	}
+
 	if debug {
 		defer func() { // this deferred method handles exit-with-error
 			if err == nil {
