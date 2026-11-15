@@ -17,6 +17,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -102,13 +103,14 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 	}
 
 	call := msg.Address32
-
-	if call.To == nil {
-		return nil, fmt.Errorf("address32 contract creation is not supported")
-	}
-
 	sender := accountBalance{statedb, call.From}
-	recipient := accountBalance{statedb, *call.To}
+	creating := call.To == nil
+
+	var recipient accountBalance
+
+	if !creating {
+		recipient = accountBalance{statedb, *call.To}
+	}
 
 	chargeFees := true
 
@@ -142,7 +144,7 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 	}
 
 	rules := evm.ChainConfig().Rules(evm.Context.BlockNumber, evm.Context.Random != nil, evm.Context.Time)
-	intrinsic, err := IntrinsicGasAddress32(msg.Data, call.AccessList, false, rules.IsShanghai)
+	intrinsic, err := IntrinsicGasAddress32(msg.Data, call.AccessList, creating, rules.IsShanghai)
 
 	if err != nil {
 		return nil, err
@@ -170,14 +172,22 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 		}
 	}
 
+	if creating && rules.IsShanghai && len(msg.Data) > params.MaxInitCodeSize {
+		return nil, fmt.Errorf("%w: code size %v limit %v", ErrMaxInitCodeSizeExceeded, len(msg.Data), params.MaxInitCodeSize)
+	}
+
 	// Code in the other namespace is not executed. The transaction is included,
 	// the nonce is spent, and fees are paid. The callee is left as it was.
 	// A 7702 delegation is code. A codeless target still receives the value.
-	code := recipient.code()
-	crossNamespaceRevert := len(code) > 0 && call.From.Kind() != call.To.Kind()
+	var crossNamespaceRevert bool
 
-	if len(code) > 0 && !crossNamespaceRevert {
-		return nil, fmt.Errorf("address32 target %s has code", recipient.label())
+	if !creating {
+		code := recipient.code()
+		crossNamespaceRevert = len(code) > 0 && call.From.Kind() != call.To.Kind()
+
+		if len(code) > 0 && !crossNamespaceRevert {
+			return nil, fmt.Errorf("address32 target %s has code", recipient.label())
+		}
 	}
 
 	var l1Cost *big.Int
@@ -216,6 +226,24 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 		return nil, err
 	}
 
+	fees := address32Fees{
+		evm:           evm,
+		statedb:       statedb,
+		msg:           msg,
+		gp:            gp,
+		sender:        sender,
+		rules:         rules,
+		intrinsic:     intrinsic,
+		floor:         floor,
+		l1Cost:        l1Cost,
+		operatorLimit: operatorLimit,
+		chargeFees:    chargeFees,
+	}
+
+	if creating {
+		return fees.applyCreation()
+	}
+
 	sender.setNonce(sender.nonce() + 1)
 
 	if !crossNamespaceRevert {
@@ -238,32 +266,9 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 		gasUsed = msg.GasLimit
 	}
 
-	leftover := msg.GasLimit - gasUsed
+	fees.refundUnspent(msg.GasLimit - gasUsed)
 
-	if leftover > 0 {
-		refund := new(big.Int).SetUint64(leftover)
-		refund.Mul(refund, msg.GasPrice)
-		sender.add(uint256.MustFromBig(refund), tracing.BalanceIncreaseGasReturn)
-		gp.AddGas(leftover)
-	}
-
-	if chargeFees && evm.Context.OperatorCostFunc != nil && rules.IsOptimismIsthmus {
-		usedCost := evm.Context.OperatorCostFunc(gasUsed, evm.Context.Time)
-
-		if operatorLimit != nil && operatorLimit.Cmp(usedCost) > 0 {
-			sender.add(new(uint256.Int).Sub(operatorLimit, usedCost), tracing.BalanceIncreaseGasReturn)
-		}
-	}
-
-	payFees := !(evm.Config.NoBaseFee && msg.GasFeeCap.Sign() == 0 && msg.GasTipCap.Sign() == 0)
-
-	if payFees && chargeFees {
-		if err := payAddress32Fees(evm, statedb, msg, rules, gasUsed, l1Cost); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := statedb.Error(); err != nil {
+	if err := fees.settle(gasUsed); err != nil {
 		return nil, err
 	}
 
@@ -274,6 +279,112 @@ func applyAddress32Message(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionRe
 	}
 
 	return result, nil
+}
+
+// address32Fees is the fee context shared by an address32 call and an address32 creation.
+type address32Fees struct {
+	evm           *vm.EVM
+	statedb       *state.StateDB
+	msg           *Message
+	gp            *GasPool
+	sender        accountBalance
+	rules         params.Rules
+	intrinsic     uint64
+	floor         uint64
+	l1Cost        *big.Int
+	operatorLimit *uint256.Int
+	chargeFees    bool
+}
+
+func (f address32Fees) refundUnspent(gasRemaining uint64) {
+	if gasRemaining == 0 {
+		return
+	}
+
+	refunded := new(big.Int).SetUint64(gasRemaining)
+	refunded.Mul(refunded, f.msg.GasPrice)
+	f.sender.add(uint256.MustFromBig(refunded), tracing.BalanceIncreaseGasReturn)
+	f.gp.AddGas(gasRemaining)
+}
+
+func (f address32Fees) settle(gasUsed uint64) error {
+	if f.chargeFees && f.evm.Context.OperatorCostFunc != nil && f.rules.IsOptimismIsthmus {
+		usedCost := f.evm.Context.OperatorCostFunc(gasUsed, f.evm.Context.Time)
+
+		if f.operatorLimit != nil && f.operatorLimit.Cmp(usedCost) > 0 {
+			f.sender.add(new(uint256.Int).Sub(f.operatorLimit, usedCost), tracing.BalanceIncreaseGasReturn)
+		}
+	}
+
+	payFees := !(f.evm.Config.NoBaseFee && f.msg.GasFeeCap.Sign() == 0 && f.msg.GasTipCap.Sign() == 0)
+
+	if payFees && f.chargeFees {
+		if err := payAddress32Fees(f.evm, f.statedb, f.msg, f.rules, gasUsed, f.l1Cost); err != nil {
+			return err
+		}
+	}
+
+	return f.statedb.Error()
+}
+
+func (f address32Fees) applyCreation() (*ExecutionResult, error) {
+	gasRemaining := f.msg.GasLimit - f.intrinsic
+	value, overflow := uint256.FromBig(f.msg.Value)
+
+	if overflow {
+		return nil, fmt.Errorf("%w: address %s", ErrInsufficientFundsForTransfer, f.sender.label())
+	}
+
+	var (
+		ret   []byte
+		vmerr error
+	)
+
+	f.evm.SetTxContext(NewEVMTxContext(f.msg))
+	f.sender.addr.Use(func(addr common.Address) {
+		ret, _, gasRemaining, vmerr = f.evm.Create(addr, f.msg.Data, gasRemaining, value)
+	}, func(addr common.Address32) {
+		ret, _, gasRemaining, vmerr = f.evm.CreateAddress32(addr, f.msg.Data, gasRemaining, value, vm.CREATE32)
+	})
+
+	// Creation returns before touching the nonce when the formula address is
+	// an address20. The transaction is included, so the sender nonce is spent
+	// and the initcode does not run.
+	if errors.Is(vmerr, common.ErrAddress32InAddress20Subspace) {
+		f.sender.setNonce(f.sender.nonce() + 1)
+	}
+
+	refund := f.statedb.GetRefund()
+	gasUsed := f.msg.GasLimit - gasRemaining
+	cap := gasUsed / params.RefundQuotient
+
+	if f.rules.IsLondon {
+		cap = gasUsed / params.RefundQuotientEIP3529
+	}
+
+	if refund > cap {
+		refund = cap
+	}
+
+	gasRemaining += refund
+
+	if f.rules.IsPrague && f.msg.GasLimit-gasRemaining < f.floor {
+		gasRemaining = f.msg.GasLimit - f.floor
+	}
+
+	gasUsed = f.msg.GasLimit - gasRemaining
+	f.refundUnspent(gasRemaining)
+
+	if err := f.settle(gasUsed); err != nil {
+		return nil, err
+	}
+
+	return &ExecutionResult{
+		UsedGas:    gasUsed,
+		MaxUsedGas: gasUsed,
+		Err:        vmerr,
+		ReturnData: ret,
+	}, nil
 }
 
 func payAddress32Fees(evm *vm.EVM, statedb *state.StateDB, msg *Message, rules params.Rules, gasUsed uint64, l1Cost *big.Int) error {
@@ -361,18 +472,8 @@ func (a accountBalance) checkNonce(nonce uint64) error {
 	return nil
 }
 
-func (a accountBalance) use(address20 func(common.Address), address32 func(common.Address32)) {
-	if addr, ok := a.addr.Address20(); ok {
-		address20(addr)
-		return
-	}
-
-	addr, _ := a.addr.Address32()
-	address32(addr)
-}
-
 func (a accountBalance) setNonce(nonce uint64) {
-	a.use(func(addr common.Address) {
+	a.addr.Use(func(addr common.Address) {
 		a.db.SetNonce(addr, nonce, tracing.NonceChangeEoACall)
 	}, func(addr common.Address32) {
 		a.db.SetAddress32Nonce(addr, nonce)
@@ -384,7 +485,7 @@ func (a accountBalance) add(amount *uint256.Int, reason tracing.BalanceChangeRea
 		return
 	}
 
-	a.use(func(addr common.Address) {
+	a.addr.Use(func(addr common.Address) {
 		a.db.AddBalance(addr, amount, reason)
 	}, func(addr common.Address32) {
 		a.db.AddAddress32Balance(addr, amount)
@@ -406,7 +507,7 @@ func (a accountBalance) sub(amount *big.Int, reason tracing.BalanceChangeReason)
 		return fmt.Errorf("%w: address %s have %v want %v", ErrInsufficientFunds, a.label(), a.balance(), cost)
 	}
 
-	a.use(func(addr common.Address) {
+	a.addr.Use(func(addr common.Address) {
 		a.db.SubBalance(addr, cost, reason)
 	}, func(addr common.Address32) {
 		a.db.SubAddress32Balance(addr, cost)

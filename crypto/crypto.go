@@ -87,6 +87,26 @@ func CreateAddress2(b common.Address, salt [32]byte, inithash []byte) common.Add
 	return common.BytesToAddress(Keccak256([]byte{0xff}, b.Bytes(), salt[:], inithash)[12:])
 }
 
+// CreateAddress32 is the address of a contract created by an address32.
+// It is keccak256(0x02 ‖ rlp([sender, nonce])), the full 32-byte hash.
+// nonce is the creator nonce before it increments. sender is the fixed 32-byte word.
+func CreateAddress32(sender common.Address32, nonce uint64) common.Address32 {
+	data, _ := rlp.EncodeToBytes([]any{sender, nonce})
+	return address32Hash(Keccak256(append([]byte{0x02}, data...)))
+}
+
+// CreateAddress232 is the address of a contract created by CREATE232.
+// It is keccak256(0x03 ‖ sender ‖ salt ‖ keccak256(initcode)), the full 32-byte hash.
+func CreateAddress232(sender common.Address32, salt [32]byte, inithash []byte) common.Address32 {
+	return address32Hash(Keccak256([]byte{0x03}, sender[:], salt[:], inithash))
+}
+
+func address32Hash(sum []byte) common.Address32 {
+	var out common.Address32
+	copy(out[:], sum)
+	return out
+}
+
 // ToECDSA creates a private key with the given D value.
 func ToECDSA(d []byte) (*ecdsa.PrivateKey, error) {
 	return toECDSA(d, true)

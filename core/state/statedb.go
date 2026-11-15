@@ -1375,10 +1375,17 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 	if err != nil {
 		return nil, err
 	}
-	// Commit dirty contract code if any exists
-	if db := s.db.TrieDB().Disk(); db != nil && len(ret.codes) > 0 {
+	// Commit dirty contract code if any exists.
+	// Address32 code is kept on the live account and written here, including
+	// when an earlier root hash already cleared the dirty flag.
+	address32Codes := s.address32CodeBlobs()
+
+	if db := s.db.TrieDB().Disk(); db != nil && (len(ret.codes) > 0 || len(address32Codes) > 0) {
 		batch := db.NewBatch()
 		for _, code := range ret.codes {
+			rawdb.WriteCode(batch, code.hash, code.blob)
+		}
+		for _, code := range address32Codes {
 			rawdb.WriteCode(batch, code.hash, code.blob)
 		}
 		if err := batch.Write(); err != nil {

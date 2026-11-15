@@ -17,8 +17,12 @@
 package crypto
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // anvil account 0. The address20 is the well-known EIP-55 value.
@@ -56,5 +60,37 @@ func TestPubkeyToAddress32(t *testing.T) {
 
 	if hex.EncodeToString(got.Bytes()) != want {
 		t.Fatalf("PubkeyToAddress32() = %x, want %s", got.Bytes(), want)
+	}
+}
+
+func TestCreateAddress32Formula(t *testing.T) {
+	var sender common.Address32
+	sender[0] = 0x11
+	sender[31] = 0x22
+	encoded, err := rlp.EncodeToBytes([]any{sender, uint64(7)})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := Keccak256(append([]byte{0x02}, encoded...))
+	got := CreateAddress32(sender, 7)
+
+	if !bytes.Equal(got[:], want) {
+		t.Fatalf("CreateAddress32() = %x, want %x", got, want)
+	}
+}
+
+func TestCreateAddress232Formula(t *testing.T) {
+	var sender common.Address32
+	sender[0] = 0x11
+	var salt [32]byte
+	salt[31] = 0x07
+	initcode := []byte{0x60, 0x42}
+	want := Keccak256(append(append(append([]byte{0x03}, sender[:]...), salt[:]...), Keccak256(initcode)...))
+	got := CreateAddress232(sender, salt, Keccak256(initcode))
+
+	if !bytes.Equal(got[:], want) {
+		t.Fatalf("CreateAddress232() = %x, want %x", got, want)
 	}
 }

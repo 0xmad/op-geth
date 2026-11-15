@@ -125,6 +125,12 @@ func address32InAddress20Subspace(b []byte) bool {
 	return true
 }
 
+// InAddress20Subspace reports whether the top 12 bytes are zero.
+// That word names the address20 in the low 20 bytes.
+func (a Address32) InAddress20Subspace() bool {
+	return address32InAddress20Subspace(a[:])
+}
+
 // Address20Of returns the address20 named by preimage.
 // A 20-byte preimage is that account. A 32-byte preimage names it only when
 // the top 12 bytes are zero; the account is the low 20 bytes. Any other

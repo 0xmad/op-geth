@@ -64,12 +64,15 @@ type Receipt struct {
 
 	// Implementation fields: These fields are added by geth when processing a transaction or retrieving a receipt.
 	// gencodec annotated fields: these are stored in the chain database.
-	TxHash            common.Hash    `json:"transactionHash" gencodec:"required"`
-	ContractAddress   common.Address `json:"contractAddress"`
-	GasUsed           uint64         `json:"gasUsed" gencodec:"required"`
-	EffectiveGasPrice *big.Int       `json:"effectiveGasPrice"` // required, but tag omitted for backwards compatibility
-	BlobGasUsed       uint64         `json:"blobGasUsed,omitempty"`
-	BlobGasPrice      *big.Int       `json:"blobGasPrice,omitempty"`
+	TxHash          common.Hash    `json:"transactionHash" gencodec:"required"`
+	ContractAddress common.Address `json:"contractAddress"`
+	// ContractAddress32 is the 32-byte contract created by a type 0x05
+	// sender-kind 1 transaction. It is derived, not part of the consensus encoding.
+	ContractAddress32 *common.Address32 `json:"-" rlp:"-"`
+	GasUsed           uint64            `json:"gasUsed" gencodec:"required"`
+	EffectiveGasPrice *big.Int          `json:"effectiveGasPrice"` // required, but tag omitted for backwards compatibility
+	BlobGasUsed       uint64            `json:"blobGasUsed,omitempty"`
+	BlobGasPrice      *big.Int          `json:"blobGasPrice,omitempty"`
 
 	// DepositNonce was introduced in Regolith to store the actual nonce used by deposit transactions
 	// The state transition process ensures this is only set for Regolith deposit transactions.
@@ -404,6 +407,43 @@ func (r *Receipt) Size() common.StorageSize {
 	return size
 }
 
+// SetCreateAddress fills the derived contract address of a creation transaction.
+// A type 0x05 sender-kind 1 creation records the address32. Every other
+// creation records the address20. A call clears both.
+func (r *Receipt) SetCreateAddress(signer Signer, tx *Transaction, nonce uint64) {
+	r.ContractAddress = common.Address{}
+	r.ContractAddress32 = nil
+
+	if tx == nil || !tx.CreatesContract() {
+		return
+	}
+
+	if tx.Type() == Address32TxType {
+		account, err := SenderAccount(signer, tx)
+
+		if err != nil {
+			return
+		}
+
+		account.Use(func(addr common.Address) {
+			r.ContractAddress = crypto.CreateAddress(addr, nonce)
+		}, func(addr common.Address32) {
+			created := crypto.CreateAddress32(addr, nonce)
+
+			if created.InAddress20Subspace() {
+				return
+			}
+
+			r.ContractAddress32 = &created
+		})
+
+		return
+	}
+
+	from, _ := Sender(signer, tx)
+	r.ContractAddress = crypto.CreateAddress(from, nonce)
+}
+
 // DeriveReceiptContext holds the contextual information needed to derive a receipt
 type DeriveReceiptContext struct {
 	BlockHash    common.Hash
@@ -438,17 +478,11 @@ func (r *Receipt) DeriveFields(signer Signer, context DeriveReceiptContext) {
 	r.TransactionIndex = context.TxIndex
 
 	// The contract address can be derived from the transaction itself
-	if context.Tx.CreatesContract() {
-		// Deriving the signer is expensive, only do if it's actually needed
-		from, _ := Sender(signer, context.Tx)
-		nonce := context.Tx.Nonce()
-		if r.DepositNonce != nil {
-			nonce = *r.DepositNonce
-		}
-		r.ContractAddress = crypto.CreateAddress(from, nonce)
-	} else {
-		r.ContractAddress = common.Address{}
+	nonce := context.Tx.Nonce()
+	if r.DepositNonce != nil {
+		nonce = *r.DepositNonce
 	}
+	r.SetCreateAddress(signer, context.Tx, nonce)
 	// The derived log fields can simply be set from the block and transaction
 	logIndex := context.LogIndex
 	for j := 0; j < len(r.Logs); j++ {

@@ -31,6 +31,10 @@ type Contract struct {
 	caller  common.Address
 	address common.Address
 
+	// address32 is set when this frame is an address32 account.
+	// A nil address32 is an address20 frame.
+	address32 *common.Address32
+
 	jumpDests JumpDestCache // Aggregated result of JUMPDEST analysis.
 	analysis  BitVec        // Locally cached result of JUMPDEST analysis
 
@@ -151,6 +155,22 @@ func (c *Contract) RefundGas(gas uint64, logger *tracing.Hooks, reason tracing.G
 // Address returns the contracts address
 func (c *Contract) Address() common.Address {
 	return c.address
+}
+
+// Address32 returns the address32 of this frame.
+// ok is false for an address20 frame.
+func (c *Contract) Address32() (common.Address32, bool) {
+	if c == nil || c.address32 == nil {
+		return common.Address32{}, false
+	}
+
+	return *c.address32, true
+}
+
+// setAddress32 marks this frame as an address32 account.
+func (c *Contract) setAddress32(addr common.Address32) {
+	copied := addr
+	c.address32 = &copied
 }
 
 // Value returns the contract's value (sent to it from it's caller)

@@ -1892,8 +1892,11 @@ func MarshalReceipt(receipt *types.Receipt, blockHash common.Hash, blockNumber u
 		fields["blobGasPrice"] = (*hexutil.Big)(receipt.BlobGasPrice)
 	}
 
-	// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
-	if receipt.ContractAddress != (common.Address{}) {
+	// A type 0x05 sender-kind 1 creation reports the 32-byte contract address.
+	// A zero address20 means this was not an address20 creation.
+	if receipt.ContractAddress32 != nil {
+		fields["contractAddress"] = hexutil.Bytes(receipt.ContractAddress32[:])
+	} else if receipt.ContractAddress != (common.Address{}) {
 		fields["contractAddress"] = receipt.ContractAddress
 	}
 	return fields

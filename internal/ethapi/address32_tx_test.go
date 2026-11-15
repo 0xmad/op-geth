@@ -204,3 +204,103 @@ func TestAddress32TransactionRPC(t *testing.T) {
 		t.Fatalf("access-list estimate = %s, want at least 25300", estimate)
 	}
 }
+
+func TestAddress32CreateReceiptAndCodeRPC(t *testing.T) {
+	key, err := crypto.HexToECDSA(anvil0Key)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sender, err := crypto.PubkeyToAddress32(key.PublicKey)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := *params.OptimismTestConfig
+	ts := uint64(0)
+	cfg.Address32Time = &ts
+	cfg.JovianTime = nil
+	initcode := []byte{0x60, 0x42, 0x60, 0x00, 0x52, 0x60, 0x01, 0x60, 0x1f, 0xf3}
+	signed, err := types.SignTx(types.NewTx(&types.Address32Tx{
+		ChainID:    cfg.ChainID,
+		GasTipCap:  big.NewInt(1),
+		GasFeeCap:  big.NewInt(2),
+		Gas:        500_000,
+		Value:      big.NewInt(0),
+		Data:       initcode,
+		SenderKind: types.SenderKindAddress32,
+	}), types.LatestSigner(&cfg), key)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	extra := eip1559.EncodeHoloceneExtraData(250, 6)
+	genesis := &core.Genesis{
+		Config:     &cfg,
+		Difficulty: big.NewInt(0),
+		ExtraData:  extra,
+		GasLimit:   30_000_000,
+		BaseFee:    big.NewInt(1),
+		Alloc: types.GenesisAlloc{
+			types.L1BlockAddr: {Storage: map[common.Hash]common.Hash{
+				types.L1FeeScalarsSlot:      {19: 1},
+				types.L1BaseFeeSlot:         common.BigToHash(big.NewInt(1_000_000)),
+				types.OperatorFeeParamsSlot: {31: 10},
+			}},
+		},
+		Address32Alloc: map[common.Address32]types.Account{
+			sender: {Balance: big.NewInt(params.Ether)},
+		},
+	}
+	backend := newTestBackend(t, 1, genesis, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
+		b.SetExtra(extra)
+		if i == 0 {
+			b.AddTx(signed)
+		}
+	})
+	defer backend.chain.Stop()
+
+	server := rpc.NewServer()
+	defer server.Stop()
+
+	if err := server.RegisterName("eth", NewBlockChainAPI(backend)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := server.RegisterName("eth", NewTransactionAPI(backend, new(AddrLocker))); err != nil {
+		t.Fatal(err)
+	}
+
+	client := rpc.DialInProc(server)
+	defer client.Close()
+
+	want := crypto.CreateAddress32(sender, 0)
+	var receipt map[string]any
+
+	if err := client.Call(&receipt, "eth_getTransactionReceipt", signed.Hash()); err != nil {
+		t.Fatal(err)
+	}
+
+	address, _ := receipt["contractAddress"].(string)
+
+	if address != "0x"+hex.EncodeToString(want[:]) {
+		t.Fatalf("contractAddress = %s, want 0x%x", address, want[:])
+	}
+
+	if len(address) != 66 {
+		t.Fatalf("contractAddress length = %d, want 66", len(address))
+	}
+
+	var code string
+
+	if err := client.Call(&code, "eth_getCode", address, "latest"); err != nil {
+		t.Fatal(err)
+	}
+
+	if code != "0x42" {
+		t.Fatalf("code = %s, want 0x42", code)
+	}
+}

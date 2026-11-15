@@ -50,6 +50,8 @@ func enableAddress32(jt *JumpTable) {
 	enableMirrored(jt, EXTCODEHASH32, jt[EXTCODEHASH], opExtCodeHash32, gasAccountCheck32)
 	enableMirrored(jt, EXTCODECOPY32, jt[EXTCODECOPY], opExtCodeCopy32, gasExtCodeCopy32)
 	enableMirrored(jt, CALL32, jt[CALL], opCall32, gasCall32)
+	enableMirrored(jt, CREATE32, jt[CREATE], opCreate32, nil)
+	enableMirrored(jt, CREATE232, jt[CREATE2], opCreate232, nil)
 }
 
 func enableMirrored(jt *JumpTable, op OpCode, mirrored *operation, execute executionFunc, wrap func(gasFunc) gasFunc) {
@@ -61,7 +63,7 @@ func enableMirrored(jt *JumpTable, op OpCode, mirrored *operation, execute execu
 	copied.execute = execute
 	copied.undefined = false
 
-	if mirrored.dynamicGas != nil {
+	if mirrored.dynamicGas != nil && wrap != nil {
 		copied.dynamicGas = wrap(mirrored.dynamicGas)
 	}
 
@@ -423,4 +425,96 @@ func (evm *EVM) callAddress32(caller common.Address, addr common.Address32, gas 
 	}
 
 	return nil, gas, nil
+}
+
+// opCreate32 deploys an address32 contract from an address32 frame.
+// An address20 creator pushes 0 and continues. The child stipend is not taken.
+// The fixed CREATE gas was already charged.
+func opCreate32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	if evm.readOnly {
+		return nil, ErrWriteProtection
+	}
+
+	var (
+		value        = scope.Stack.pop()
+		offset, size = scope.Stack.pop(), scope.Stack.pop()
+		input        = scope.Memory.GetCopy(offset.Uint64(), size.Uint64())
+		gas          = scope.Contract.Gas
+		stackvalue   = size
+	)
+
+	gas -= gas / 64
+
+	if _, err := address32DB(evm); err != nil {
+		return nil, err
+	}
+
+	caller, ok := scope.Contract.Address32()
+
+	if !ok {
+		return pushCreateFailure(evm, scope, stackvalue)
+	}
+
+	scope.Contract.UseGas(gas, evm.Config.Tracer, tracing.GasChangeCallContractCreation)
+	res, addr, returnGas, suberr := evm.CreateAddress32(caller, input, gas, &value, CREATE32)
+	return finishCreate32(evm, scope, stackvalue, res, addr, returnGas, suberr)
+}
+
+// opCreate232 deploys an address32 contract at a salted address.
+// An address20 creator pushes 0 and continues, and the child stipend is returned.
+func opCreate232(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	if evm.readOnly {
+		return nil, ErrWriteProtection
+	}
+
+	var (
+		endowment    = scope.Stack.pop()
+		offset, size = scope.Stack.pop(), scope.Stack.pop()
+		salt         = scope.Stack.pop()
+		input        = scope.Memory.GetCopy(offset.Uint64(), size.Uint64())
+		gas          = scope.Contract.Gas
+		stackvalue   = size
+	)
+
+	gas -= gas / 64
+
+	if _, err := address32DB(evm); err != nil {
+		return nil, err
+	}
+
+	caller, ok := scope.Contract.Address32()
+
+	if !ok {
+		return pushCreateFailure(evm, scope, stackvalue)
+	}
+
+	scope.Contract.UseGas(gas, evm.Config.Tracer, tracing.GasChangeCallContractCreation2)
+	res, addr, returnGas, suberr := evm.CreateAddress232(caller, input, gas, &endowment, &salt, CREATE232)
+	return finishCreate32(evm, scope, stackvalue, res, addr, returnGas, suberr)
+}
+
+func pushCreateFailure(evm *EVM, scope *ScopeContext, stackvalue uint256.Int) ([]byte, error) {
+	stackvalue.Clear()
+	scope.Stack.push(&stackvalue)
+	evm.returnData = nil
+	return nil, nil
+}
+
+func finishCreate32(evm *EVM, scope *ScopeContext, stackvalue uint256.Int, res []byte, addr common.Address32, returnGas uint64, suberr error) ([]byte, error) {
+	if suberr != nil {
+		stackvalue.Clear()
+	} else {
+		stackvalue.SetBytes(addr[:])
+	}
+
+	scope.Stack.push(&stackvalue)
+	scope.Contract.RefundGas(returnGas, evm.Config.Tracer, tracing.GasChangeCallLeftOverRefunded)
+
+	if suberr == ErrExecutionReverted {
+		evm.returnData = res
+		return res, nil
+	}
+
+	evm.returnData = nil
+	return nil, nil
 }
