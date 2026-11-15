@@ -255,6 +255,19 @@ func PubkeyToAddress(p ecdsa.PublicKey) common.Address {
 	return common.BytesToAddress(Keccak256(pubBytes[1:])[12:])
 }
 
+// PubkeyToAddress32 derives an Address32 as keccak256(0x01 ‖ pubkey[1:]),
+// where pubkey[1:] is the 64-byte uncompressed public key. A result whose
+// top 12 bytes are zero is rejected.
+func PubkeyToAddress32(p ecdsa.PublicKey) (common.Address32, error) {
+	pubBytes := FromECDSAPub(&p)
+
+	if len(pubBytes) != 65 {
+		return common.Address32{}, errors.New("invalid secp256k1 public key")
+	}
+
+	return common.NewAddress32(Keccak256(append([]byte{0x01}, pubBytes[1:]...)))
+}
+
 func zeroBytes(bytes []byte) {
 	clear(bytes)
 }

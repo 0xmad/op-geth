@@ -398,6 +398,7 @@ var (
 		conf.IsthmusTime = &zero
 		conf.JovianTime = &zero
 		conf.KarstTime = nil
+		conf.Address32Time = nil
 		conf.InteropTime = nil
 		conf.Optimism = &OptimismConfig{EIP1559Elasticity: 6, EIP1559Denominator: 50, EIP1559DenominatorCanyon: uint64ptr(250)}
 		return &conf
@@ -510,13 +511,14 @@ type ChainConfig struct {
 	RegolithTime *uint64  `json:"regolithTime,omitempty"` // Regolith switch time (nil = no fork, 0 = already on optimism regolith)
 	CanyonTime   *uint64  `json:"canyonTime,omitempty"`   // Canyon switch time (nil = no fork, 0 = already on optimism canyon)
 	// Delta: the Delta upgrade does not affect the execution-layer, and is thus not configurable in the chain config.
-	EcotoneTime  *uint64 `json:"ecotoneTime,omitempty"`  // Ecotone switch time (nil = no fork, 0 = already on optimism ecotone)
-	FjordTime    *uint64 `json:"fjordTime,omitempty"`    // Fjord switch time (nil = no fork, 0 = already on Optimism Fjord)
-	GraniteTime  *uint64 `json:"graniteTime,omitempty"`  // Granite switch time (nil = no fork, 0 = already on Optimism Granite)
-	HoloceneTime *uint64 `json:"holoceneTime,omitempty"` // Holocene switch time (nil = no fork, 0 = already on Optimism Holocene)
-	IsthmusTime  *uint64 `json:"isthmusTime,omitempty"`  // Isthmus switch time (nil = no fork, 0 = already on Optimism Isthmus)
-	JovianTime   *uint64 `json:"jovianTime,omitempty"`   // Jovian switch time (nil = no fork, 0 = already on Optimism Jovian)
-	KarstTime    *uint64 `json:"karstTime,omitempty"`    // Karst switch time (nil = no fork, 0 = already on Optimism Karst)
+	EcotoneTime   *uint64 `json:"ecotoneTime,omitempty"`   // Ecotone switch time (nil = no fork, 0 = already on optimism ecotone)
+	FjordTime     *uint64 `json:"fjordTime,omitempty"`     // Fjord switch time (nil = no fork, 0 = already on Optimism Fjord)
+	GraniteTime   *uint64 `json:"graniteTime,omitempty"`   // Granite switch time (nil = no fork, 0 = already on Optimism Granite)
+	HoloceneTime  *uint64 `json:"holoceneTime,omitempty"`  // Holocene switch time (nil = no fork, 0 = already on Optimism Holocene)
+	IsthmusTime   *uint64 `json:"isthmusTime,omitempty"`   // Isthmus switch time (nil = no fork, 0 = already on Optimism Isthmus)
+	JovianTime    *uint64 `json:"jovianTime,omitempty"`    // Jovian switch time (nil = no fork, 0 = already on Optimism Jovian)
+	KarstTime     *uint64 `json:"karstTime,omitempty"`     // Karst switch time (nil = no fork, 0 = already on Optimism Karst)
+	Address32Time *uint64 `json:"address32Time,omitempty"` // Address32 switch time (nil = no fork, 0 = already on Address32)
 
 	InteropTime *uint64 `json:"interopTime,omitempty"` // Interop switch time (nil = no fork, 0 = already on optimism interop)
 
@@ -677,6 +679,9 @@ func (c *ChainConfig) String() string {
 	if c.JovianTime != nil {
 		result += fmt.Sprintf(", Jovian: %v", *c.JovianTime)
 	}
+	if c.Address32Time != nil {
+		result += fmt.Sprintf(", Address32: %v", *c.Address32Time)
+	}
 	if c.InteropTime != nil {
 		result += fmt.Sprintf(", Interop: %v", *c.InteropTime)
 	}
@@ -784,7 +789,7 @@ func (c *ChainConfig) Description() string {
 	if c.VerkleTime != nil {
 		banner += fmt.Sprintf(" - Verkle:                      @%-10v blob: (%s)\n", *c.VerkleTime, blobScheduleConfig.Verkle)
 	}
-	banner += fmt.Sprintf("\nAll fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/\n")
+	banner += "\nAll fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/\n"
 	banner += c.opDescription()
 	return banner
 }
@@ -1025,6 +1030,10 @@ func (c *ChainConfig) IsKarst(time uint64) bool {
 	return isTimestampForked(c.KarstTime, time)
 }
 
+func (c *ChainConfig) IsAddress32(time uint64) bool {
+	return isTimestampForked(c.Address32Time, time)
+}
+
 func (c *ChainConfig) IsInterop(time uint64) bool {
 	return isTimestampForked(c.InteropTime, time)
 }
@@ -1086,6 +1095,10 @@ func (c *ChainConfig) IsOptimismJovian(time uint64) bool {
 
 func (c *ChainConfig) IsOptimismKarst(time uint64) bool {
 	return c.IsOptimism() && c.IsKarst(time)
+}
+
+func (c *ChainConfig) IsOptimismAddress32(time uint64) bool {
+	return c.IsOptimism() && c.IsAddress32(time)
 }
 
 // IsOptimismPreBedrock returns true iff this is an optimism node & bedrock is not yet active

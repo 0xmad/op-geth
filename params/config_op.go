@@ -36,6 +36,9 @@ func (c *ChainConfig) opCheckCompatible(newcfg *ChainConfig, headNumber *big.Int
 	if isForkTimestampIncompatible(c.KarstTime, newcfg.KarstTime, headTimestamp, genesisTimestamp) {
 		return newTimestampCompatError("Karst fork timestamp", c.KarstTime, newcfg.KarstTime)
 	}
+	if isForkTimestampIncompatible(c.Address32Time, newcfg.Address32Time, headTimestamp, genesisTimestamp) {
+		return newTimestampCompatError("Address32 fork timestamp", c.Address32Time, newcfg.Address32Time)
+	}
 	if isForkTimestampIncompatible(c.InteropTime, newcfg.InteropTime, headTimestamp, genesisTimestamp) {
 		return newTimestampCompatError("Interop fork timestamp", c.InteropTime, newcfg.InteropTime)
 	}
@@ -70,6 +73,9 @@ func (c *ChainConfig) opDescription() string {
 	}
 	if c.KarstTime != nil {
 		banner += fmt.Sprintf(" - Karst:                       @%-10v\n", *c.KarstTime)
+	}
+	if c.Address32Time != nil {
+		banner += fmt.Sprintf(" - Address32:                   @%-10v\n", *c.Address32Time)
 	}
 	if c.InteropTime != nil {
 		banner += fmt.Sprintf(" - Interop:                     @%-10v\n", *c.InteropTime)

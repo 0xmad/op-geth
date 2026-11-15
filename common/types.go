@@ -30,7 +30,6 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"golang.org/x/crypto/sha3"
 )
 
 // Lengths of hashes and addresses in bytes.
@@ -250,33 +249,12 @@ func (a Address) Big() *big.Int { return new(big.Int).SetBytes(a[:]) }
 
 // Hex returns an EIP55-compliant hex string representation of the address.
 func (a Address) Hex() string {
-	return string(a.checksumHex())
+	return eip55Hex(a[:])
 }
 
 // String implements fmt.Stringer.
 func (a Address) String() string {
 	return a.Hex()
-}
-
-func (a *Address) checksumHex() []byte {
-	buf := a.hex()
-
-	// compute checksum
-	sha := sha3.NewLegacyKeccak256()
-	sha.Write(buf[2:])
-	hash := sha.Sum(nil)
-	for i := 2; i < len(buf); i++ {
-		hashByte := hash[(i-2)/2]
-		if i%2 == 0 {
-			hashByte = hashByte >> 4
-		} else {
-			hashByte &= 0xf
-		}
-		if buf[i] > '9' && hashByte > 7 {
-			buf[i] -= 32
-		}
-	}
-	return buf[:]
 }
 
 func (a Address) hex() []byte {
@@ -291,11 +269,11 @@ func (a Address) hex() []byte {
 func (a Address) Format(s fmt.State, c rune) {
 	switch c {
 	case 'v', 's':
-		s.Write(a.checksumHex())
+		s.Write([]byte(eip55Hex(a[:])))
 	case 'q':
 		q := []byte{'"'}
 		s.Write(q)
-		s.Write(a.checksumHex())
+		s.Write([]byte(eip55Hex(a[:])))
 		s.Write(q)
 	case 'x', 'X':
 		// %x disables the checksum.

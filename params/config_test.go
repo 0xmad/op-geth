@@ -21,6 +21,7 @@ import (
 	"math"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -401,4 +402,72 @@ func TestIsOptimismGenesisBlock(t *testing.T) {
 	// nil block number returns false
 	c.Optimism = &OptimismConfig{}
 	require.False(t, c.IsOptimismGenesisBlock(nil))
+}
+
+func TestAddress32TimeUnsetByDefault(t *testing.T) {
+	if OptimismTestConfig.Address32Time != nil {
+		t.Fatalf("Address32Time = %d, want unset", *OptimismTestConfig.Address32Time)
+	}
+
+	if OptimismTestConfig.IsAddress32(0) || OptimismTestConfig.IsOptimismAddress32(0) {
+		t.Fatal("unset Address32Time is active")
+	}
+
+	if (&ChainConfig{}).IsAddress32(0) {
+		t.Fatal("nil Address32Time is active")
+	}
+}
+
+func TestAddress32TimeActivatesAtTimestamp(t *testing.T) {
+	ts := uint64(100)
+	cfg := &ChainConfig{Address32Time: &ts, Optimism: &OptimismConfig{}}
+
+	if cfg.IsAddress32(99) {
+		t.Fatal("Address32 active before its timestamp")
+	}
+
+	if !cfg.IsAddress32(100) {
+		t.Fatal("Address32 inactive at its timestamp")
+	}
+
+	if !cfg.IsOptimismAddress32(100) {
+		t.Fatal("optimism Address32 inactive at its timestamp")
+	}
+
+	if (&ChainConfig{Address32Time: &ts}).IsOptimismAddress32(100) {
+		t.Fatal("IsOptimismAddress32 active on a non-optimism chain")
+	}
+}
+
+func TestAddress32TimeCompatible(t *testing.T) {
+	stored := &ChainConfig{Address32Time: newUint64(10)}
+	updated := &ChainConfig{Address32Time: newUint64(20)}
+	err := stored.CheckCompatible(updated, 0, 25, newUint64(15))
+	want := &ConfigCompatError{
+		What:         "Address32 fork timestamp",
+		StoredTime:   newUint64(10),
+		NewTime:      newUint64(20),
+		RewindToTime: 9,
+	}
+
+	if !reflect.DeepEqual(err, want) {
+		t.Fatalf("CheckCompatible() = %#v, want %#v", err, want)
+	}
+}
+
+func TestAddress32TimeDescription(t *testing.T) {
+	ts := uint64(7)
+	cfg := &ChainConfig{
+		ChainID:       big.NewInt(1),
+		Address32Time: &ts,
+		Optimism:      &OptimismConfig{},
+	}
+
+	if !strings.Contains(cfg.String(), "Address32: 7") {
+		t.Fatalf("String() = %s", cfg.String())
+	}
+
+	if !strings.Contains(cfg.Description(), "Address32:") {
+		t.Fatalf("Description() = %s", cfg.Description())
+	}
 }
