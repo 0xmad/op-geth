@@ -756,7 +756,11 @@ func (pool *LegacyPool) add(tx *types.Transaction) (replaced bool, err error) {
 		return false, err
 	}
 	// already validated by this point
-	from, _ := types.Sender(pool.signer, tx)
+	from, err := types.Sender(pool.signer, tx)
+
+	if err != nil {
+		return false, err
+	}
 
 	// If the address is not yet known, request exclusivity to track the account
 	// only by this subpool until all transactions are evicted

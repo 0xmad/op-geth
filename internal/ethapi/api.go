@@ -19,6 +19,7 @@ package ethapi
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	gomath "math"
@@ -1157,6 +1158,51 @@ type RPCTransaction struct {
 	IsSystemTx *bool        `json:"isSystemTx,omitempty"`
 	// deposit-tx post-Canyon only
 	DepositReceiptVersion *hexutil.Uint64 `json:"depositReceiptVersion,omitempty"`
+
+	// SenderKind selects the account that pays for a type 0x05 transaction.
+	SenderKind *hexutil.Uint64 `json:"senderKind,omitempty"`
+	// FromWord is the 32-byte sender. MarshalJSON writes it over the from field.
+	FromWord hexutil.Bytes `json:"-"`
+	// ToWord is the 32-byte recipient. MarshalJSON writes it over the to field.
+	ToWord hexutil.Bytes `json:"-"`
+}
+
+// MarshalJSON writes a type 0x05 transaction with 32-byte from and to.
+func (tx *RPCTransaction) MarshalJSON() ([]byte, error) {
+	type plain RPCTransaction
+	encoded, err := json.Marshal((*plain)(tx))
+
+	if err != nil || tx.Type != hexutil.Uint64(types.Address32TxType) {
+		return encoded, err
+	}
+
+	var fields map[string]json.RawMessage
+
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+
+	if len(tx.FromWord) == 32 {
+		raw, err := json.Marshal(hexutil.Encode(tx.FromWord))
+
+		if err != nil {
+			return nil, err
+		}
+
+		fields["from"] = raw
+	}
+
+	if len(tx.ToWord) == 32 {
+		raw, err := json.Marshal(hexutil.Encode(tx.ToWord))
+
+		if err != nil {
+			return nil, err
+		}
+
+		fields["to"] = raw
+	}
+
+	return json.Marshal(fields)
 }
 
 // newRPCTransaction returns a transaction that will serialize to the RPC
@@ -1218,6 +1264,38 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		result.Accesses = &al
 		result.ChainID = (*hexutil.Big)(tx.ChainId())
 		result.YParity = &yparity
+
+	case types.Address32TxType:
+		yparity := hexutil.Uint64(v.Sign())
+		result.ChainID = (*hexutil.Big)(tx.ChainId())
+		result.YParity = &yparity
+		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
+		result.GasTipCap = (*hexutil.Big)(tx.GasTipCap())
+
+		if baseFee != nil && blockHash != (common.Hash{}) {
+			result.GasPrice = (*hexutil.Big)(effectiveGasPrice(tx, baseFee))
+		} else {
+			result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
+		}
+
+		if payload := tx.Address32Tx(); payload != nil {
+			kind := hexutil.Uint64(payload.SenderKind)
+			result.SenderKind = &kind
+
+			if word, ok := payload.ToWord(); ok {
+				result.ToWord = word
+			}
+		}
+
+		if account, err := types.SenderAccount(signer, tx); err == nil {
+			if word, err := account.Word32(); err == nil {
+				result.FromWord = word
+			}
+
+			if legacy, ok := account.Legacy(); ok {
+				result.From = legacy
+			}
+		}
 
 	case types.DynamicFeeTxType:
 		al := tx.AccessList()
@@ -1738,7 +1816,7 @@ func (api *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash commo
 
 // MarshalReceipt marshals a transaction receipt into a JSON object.
 func MarshalReceipt(receipt *types.Receipt, blockHash common.Hash, blockNumber uint64, signer types.Signer, tx *types.Transaction, txIndex int, chainConfig *params.ChainConfig) map[string]interface{} {
-	from, _ := types.Sender(signer, tx)
+	from, to, senderKind := receiptParties(signer, tx)
 
 	fields := map[string]interface{}{
 		"blockHash":         blockHash,
@@ -1746,7 +1824,7 @@ func MarshalReceipt(receipt *types.Receipt, blockHash common.Hash, blockNumber u
 		"transactionHash":   tx.Hash(),
 		"transactionIndex":  hexutil.Uint64(txIndex),
 		"from":              from,
-		"to":                tx.To(),
+		"to":                to,
 		"gasUsed":           hexutil.Uint64(receipt.GasUsed),
 		"cumulativeGasUsed": hexutil.Uint64(receipt.CumulativeGasUsed),
 		"contractAddress":   nil,
@@ -1805,6 +1883,10 @@ func MarshalReceipt(receipt *types.Receipt, blockHash common.Hash, blockNumber u
 		fields["logs"] = []*types.Log{}
 	}
 
+	if senderKind != nil {
+		fields["senderKind"] = *senderKind
+	}
+
 	if tx.Type() == types.BlobTxType {
 		fields["blobGasUsed"] = hexutil.Uint64(receipt.BlobGasUsed)
 		fields["blobGasPrice"] = (*hexutil.Big)(receipt.BlobGasPrice)
@@ -1815,6 +1897,39 @@ func MarshalReceipt(receipt *types.Receipt, blockHash common.Hash, blockNumber u
 		fields["contractAddress"] = receipt.ContractAddress
 	}
 	return fields
+}
+
+// receiptParties returns the JSON from, to, and sender kind for a receipt.
+// A type 0x05 transaction reports the 32-byte words. Every other type reports
+// the 20-byte addresses.
+func receiptParties(signer types.Signer, tx *types.Transaction) (any, any, *hexutil.Uint64) {
+	if tx.Type() != types.Address32TxType {
+		from, _ := types.Sender(signer, tx)
+		return from, tx.To(), nil
+	}
+
+	var (
+		from any
+		to   any
+		kind *hexutil.Uint64
+	)
+
+	if account, err := types.SenderAccount(signer, tx); err == nil {
+		if word, err := account.Word32(); err == nil {
+			from = hexutil.Bytes(word)
+		}
+	}
+
+	if payload := tx.Address32Tx(); payload != nil {
+		value := hexutil.Uint64(payload.SenderKind)
+		kind = &value
+
+		if word, ok := payload.ToWord(); ok {
+			to = hexutil.Bytes(word)
+		}
+	}
+
+	return from, to, kind
 }
 
 // sign is a helper function that signs a transaction with the private key of the given address.

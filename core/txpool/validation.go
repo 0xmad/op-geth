@@ -116,8 +116,11 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if !rules.IsPrague && tx.Type() == types.SetCodeTxType {
 		return fmt.Errorf("%w: type %d rejected, pool not yet in Prague", core.ErrTxTypeNotSupported, tx.Type())
 	}
+	if !opts.Config.IsAddress32(head.Time) && tx.Type() == types.Address32TxType {
+		return fmt.Errorf("%w: type %d rejected, Address32 is not active", core.ErrTxTypeNotSupported, tx.Type())
+	}
 	// Check whether the init code size has been exceeded
-	if rules.IsShanghai && tx.To() == nil && len(tx.Data()) > params.MaxInitCodeSize {
+	if rules.IsShanghai && tx.CreatesContract() && len(tx.Data()) > params.MaxInitCodeSize {
 		return fmt.Errorf("%w: code size %v, limit %v", core.ErrMaxInitCodeSizeExceeded, len(tx.Data()), params.MaxInitCodeSize)
 	}
 	if rules.IsOsaka && tx.Gas() > params.MaxTxGas {
@@ -148,7 +151,11 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 		return core.ErrTipAboveFeeCap
 	}
 	// Make sure the transaction is signed properly
-	if _, err := types.Sender(signer, tx); err != nil {
+	if tx.Type() == types.Address32TxType {
+		if _, err := types.SenderAccount(signer, tx); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidSender, err)
+		}
+	} else if _, err := types.Sender(signer, tx); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidSender, err)
 	}
 	// Limit nonce to 2^64-1 per EIP-2681
@@ -157,7 +164,15 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	}
 	// Ensure the transaction has more gas than the bare minimum needed to cover
 	// the transaction metadata
-	intrGas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), tx.To() == nil, true, rules.IsIstanbul, rules.IsShanghai)
+	var (
+		intrGas uint64
+		err     error
+	)
+	if payload := tx.Address32Tx(); payload != nil {
+		intrGas, err = core.IntrinsicGasAddress32(tx.Data(), payload.AccessList, tx.CreatesContract(), rules.IsShanghai)
+	} else {
+		intrGas, err = core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), tx.CreatesContract(), true, rules.IsIstanbul, rules.IsShanghai)
+	}
 	if err != nil {
 		return err
 	}
@@ -278,12 +293,41 @@ type ValidationOptionsWithState struct {
 // This check is public to allow different transaction pools to check the stateful
 // rules without duplicating code and running the risk of missed updates.
 func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, opts *ValidationOptionsWithState) error {
+	if tx.Type() == types.Address32TxType {
+		return validateAddress32TransactionWithState(tx, signer, opts)
+	}
 	// Ensure the transaction adheres to nonce ordering
 	from, err := types.Sender(signer, tx) // already validated (and cached), but cleaner to check
 	if err != nil {
 		log.Error("Transaction sender recovery failed", "err", err)
 		return err
 	}
+	return validateLegacySenderState(tx, from, opts)
+}
+
+func validateAddress32TransactionWithState(tx *types.Transaction, signer types.Signer, opts *ValidationOptionsWithState) error {
+	account, err := types.SenderAccount(signer, tx)
+
+	if err != nil {
+		log.Error("Transaction sender recovery failed", "err", err)
+		return err
+	}
+
+	if legacy, ok := account.Legacy(); ok {
+		return validateLegacySenderState(tx, legacy, opts)
+	}
+
+	wide, _ := account.Address32()
+	next := opts.State.Address32Nonce(wide)
+
+	if next > tx.Nonce() {
+		return fmt.Errorf("%w: next nonce %v, tx nonce %v", core.ErrNonceTooLow, next, tx.Nonce())
+	}
+	// A wide sender is not indexed by the 20-byte pool, so it has no queued spend.
+	return checkSenderFunds(tx, opts.State.Address32Balance(wide).ToBig(), new(big.Int), nil, opts.RollupCostFn)
+}
+
+func validateLegacySenderState(tx *types.Transaction, from common.Address, opts *ValidationOptionsWithState) error {
 	next := opts.State.GetNonce(from)
 	if next > tx.Nonce() {
 		return fmt.Errorf("%w: next nonce %v, tx nonce %v", core.ErrNonceTooLow, next, tx.Nonce())
@@ -296,10 +340,26 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 		}
 	}
 	// Ensure the transactor has enough funds to cover the transaction costs
-	var (
-		balance           = opts.State.GetBalance(from).ToBig()
-		cost256, overflow = TotalTxCost(tx, opts.RollupCostFn)
-	)
+	// and replacements or nonce expansions without overdrafts.
+	balance := opts.State.GetBalance(from).ToBig()
+	spent := opts.ExistingExpenditure(from)
+	prev := opts.ExistingCost(from, tx.Nonce())
+
+	if err := checkSenderFunds(tx, balance, spent, prev, opts.RollupCostFn); err != nil {
+		return err
+	}
+
+	if prev == nil && opts.UsedAndLeftSlots != nil {
+		if used, left := opts.UsedAndLeftSlots(from); left <= 0 {
+			return fmt.Errorf("%w: pooled %d txs", ErrAccountLimitExceeded, used)
+		}
+	}
+
+	return nil
+}
+
+func checkSenderFunds(tx *types.Transaction, balance, spent, prev *big.Int, rollup RollupCostFunc) error {
+	cost256, overflow := TotalTxCost(tx, rollup)
 	if overflow {
 		return fmt.Errorf("%w: total tx cost overflow", core.ErrInsufficientFunds)
 	}
@@ -307,10 +367,7 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 	if balance.Cmp(cost) < 0 {
 		return fmt.Errorf("%w: balance %v, tx cost %v, overshot %v", core.ErrInsufficientFunds, balance, cost, new(big.Int).Sub(cost, balance))
 	}
-	// Ensure the transactor has enough funds to cover for replacements or nonce
-	// expansions without overdrafts
-	spent := opts.ExistingExpenditure(from)
-	if prev := opts.ExistingCost(from, tx.Nonce()); prev != nil {
+	if prev != nil {
 		bump := new(big.Int).Sub(cost, prev)
 		need := new(big.Int).Add(spent, bump)
 		if balance.Cmp(need) < 0 {
@@ -320,14 +377,6 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 		need := new(big.Int).Add(spent, cost)
 		if balance.Cmp(need) < 0 {
 			return fmt.Errorf("%w: balance %v, queued cost %v, tx cost %v, overshot %v", core.ErrInsufficientFunds, balance, spent, cost, new(big.Int).Sub(need, balance))
-		}
-		// Transaction takes a new nonce value out of the pool. Ensure it doesn't
-		// overflow the number of permitted transactions from a single account
-		// (i.e. max cancellable via out-of-bound transaction).
-		if opts.UsedAndLeftSlots != nil {
-			if used, left := opts.UsedAndLeftSlots(from); left <= 0 {
-				return fmt.Errorf("%w: pooled %d txs", ErrAccountLimitExceeded, used)
-			}
 		}
 	}
 	return nil
