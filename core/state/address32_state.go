@@ -18,34 +18,77 @@ package state
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/holiman/uint256"
 )
 
 // address32Account is an Address32 account tracked inside one state transition.
 type address32Account struct {
-	data    types.StateAccount
-	origin  *types.StateAccount
-	code    []byte
-	created bool
-	dirty   bool
+	data                 types.StateAccount
+	origin               *types.StateAccount
+	code                 []byte
+	storage              map[common.Hash]common.Hash
+	originStorage        map[common.Hash]common.Hash
+	storageTrie          *trie.StateTrie
+	created              bool // absent from the trie when first seen; not the EIP-6780 flag
+	dirty                bool
+	createdInTransaction bool // EIP-6780: set only by CreateAddress32Contract
+	selfDestructed       bool
 }
 
 func (w *address32Account) copy() *address32Account {
 	out := &address32Account{
-		data:    *w.data.Copy(),
-		code:    common.CopyBytes(w.code),
-		created: w.created,
-		dirty:   w.dirty,
+		data:                 *w.data.Copy(),
+		code:                 common.CopyBytes(w.code),
+		storage:              copyHashMap(w.storage),
+		originStorage:        copyHashMap(w.originStorage),
+		created:              w.created,
+		dirty:                w.dirty,
+		createdInTransaction: w.createdInTransaction,
+		selfDestructed:       w.selfDestructed,
+	}
+
+	if w.storageTrie != nil {
+		out.storageTrie = w.storageTrie.Copy()
 	}
 
 	if w.origin != nil {
 		out.origin = w.origin.Copy()
 	}
+
+	return out
+}
+
+func copyAddress32Slots(in map[common.Address32]map[common.Hash]struct{}) map[common.Address32]map[common.Hash]struct{} {
+	out := make(map[common.Address32]map[common.Hash]struct{}, len(in))
+
+	for addr, slots := range in {
+		copied := make(map[common.Hash]struct{}, len(slots))
+
+		for slot := range slots {
+			copied[slot] = struct{}{}
+		}
+
+		out[addr] = copied
+	}
+
+	return out
+}
+
+func copyHashMap(in map[common.Hash]common.Hash) map[common.Hash]common.Hash {
+	if in == nil {
+		return nil
+	}
+
+	out := make(map[common.Hash]common.Hash, len(in))
+
+	maps.Copy(out, in)
 
 	return out
 }
@@ -203,7 +246,7 @@ func (s *StateDB) address32CodeBlobs() []contractCode {
 
 // commitAddress32Accounts writes dirty Address32 accounts into the account trie.
 func (s *StateDB) commitAddress32Accounts() {
-	if len(s.address32Accounts) == 0 || s.trie == nil {
+	if s.trie == nil || (len(s.address32Accounts) == 0 && len(s.address32Destruct) == 0) {
 		return
 	}
 
@@ -219,6 +262,11 @@ func (s *StateDB) commitAddress32Accounts() {
 			continue
 		}
 
+		if err := s.updateAddress32Storage(addr, obj); err != nil {
+			s.setError(fmt.Errorf("update address32 storage %s: %w", addr.Hex(), err))
+			return
+		}
+
 		if err := tr.UpdateAccountPreimage(addr[:], obj.data.Copy()); err != nil {
 			s.setError(fmt.Errorf("update address32 %s: %w", addr.Hex(), err))
 			return
@@ -226,6 +274,182 @@ func (s *StateDB) commitAddress32Accounts() {
 
 		obj.dirty = false
 	}
+
+	for addr := range s.address32Destruct {
+		tr.MustDelete(addr[:])
+	}
+}
+
+// updateAddress32Storage folds the storage overlay into a trie opened at the
+// account's root from when it was loaded. The trie stays on the account until
+// the block commit collects its nodes. The account root is updated first so
+// the account trie records the storage root.
+func (s *StateDB) updateAddress32Storage(addr common.Address32, obj *address32Account) error {
+	if len(obj.storage) == 0 {
+		return nil
+	}
+
+	base := types.EmptyRootHash
+
+	if obj.origin != nil && obj.origin.Root != (common.Hash{}) {
+		base = obj.origin.Root
+	}
+
+	st, err := trie.NewStateTrie(trie.StorageTrieID(s.originalRoot, crypto.Keccak256Hash(addr[:]), base), s.db.TrieDB())
+
+	if err != nil {
+		return err
+	}
+
+	for key, value := range obj.storage {
+		var writeErr error
+
+		if value == (common.Hash{}) {
+			writeErr = st.DeleteStorage(common.Address{}, key[:])
+		} else {
+			writeErr = st.UpdateStorage(common.Address{}, key[:], common.TrimLeftZeroes(value[:]))
+		}
+
+		if writeErr != nil {
+			return writeErr
+		}
+	}
+
+	obj.data.Root = st.Hash()
+	obj.storageTrie = st
+	return nil
+}
+
+// commitAddress32Storage returns the dirty storage-trie nodes for the block commit.
+func (s *StateDB) commitAddress32Storage() []*trienode.NodeSet {
+	var sets []*trienode.NodeSet
+
+	for _, obj := range s.address32Accounts {
+		if obj == nil || obj.storageTrie == nil {
+			continue
+		}
+
+		_, nodes := obj.storageTrie.Commit(false)
+		obj.storageTrie = nil
+
+		if nodes != nil {
+			sets = append(sets, nodes)
+		}
+	}
+
+	return sets
+}
+
+// CreateAddress32Contract marks addr as created in this transaction.
+// SELFDESTRUCT32 deletes only that kind of account.
+func (s *StateDB) CreateAddress32Contract(addr common.Address32) {
+	obj := s.getOrNewAddress32Account(addr)
+
+	if obj.createdInTransaction {
+		return
+	}
+
+	obj.createdInTransaction = true
+	s.journal.append(address32CreatedInTransactionChange{account: addr})
+}
+
+// SelfDestructAddress32 registers addr for deletion when it was created
+// in this transaction. The balance transfer is done by the opcode.
+func (s *StateDB) SelfDestructAddress32(addr common.Address32) {
+	obj := s.liveAddress32(addr)
+
+	if obj == nil || !obj.createdInTransaction || obj.selfDestructed {
+		return
+	}
+
+	obj.selfDestructed = true
+	s.journal.append(address32SelfDestructChange{account: addr})
+}
+
+// Address32SelfDestructed reports whether addr is registered for deletion.
+func (s *StateDB) Address32SelfDestructed(addr common.Address32) bool {
+	if obj := s.liveAddress32(addr); obj != nil && obj.selfDestructed {
+		return true
+	}
+
+	return s.address32Destroyed(addr)
+}
+
+func (s *StateDB) address32Destroyed(addr common.Address32) bool {
+	if len(s.address32Destruct) == 0 {
+		return false
+	}
+
+	_, ok := s.address32Destruct[addr]
+	return ok
+}
+
+// finaliseAddress32 ends the transaction for address32 accounts.
+// A contract created and selfdestructed in this transaction leaves the live set.
+// createdInTransaction does not carry into the next transaction.
+// The storage overlay is copied into originStorage so the next transaction's
+// SSTORE original is the value at this boundary.
+func (s *StateDB) finaliseAddress32() {
+	for addr, obj := range s.address32Accounts {
+		if obj == nil {
+			continue
+		}
+
+		obj.createdInTransaction = false
+
+		// The next transaction's original storage is the value at this boundary.
+		for key, value := range obj.storage {
+			if obj.originStorage == nil {
+				obj.originStorage = make(map[common.Hash]common.Hash)
+			}
+
+			obj.originStorage[key] = value
+		}
+
+		if !obj.selfDestructed {
+			continue
+		}
+
+		if s.address32Destruct == nil {
+			s.address32Destruct = make(map[common.Address32]*address32Account)
+		}
+
+		if _, ok := s.address32Destruct[addr]; !ok {
+			s.address32Destruct[addr] = obj
+		}
+
+		delete(s.address32Accounts, addr)
+	}
+}
+
+// Address32SlotWarm reports whether slot was touched in this transaction.
+func (s *StateDB) Address32SlotWarm(addr common.Address32, slot common.Hash) bool {
+	slots := s.address32Slots[addr]
+
+	if slots == nil {
+		return false
+	}
+
+	_, ok := slots[slot]
+	return ok
+}
+
+// WarmAddress32Slot marks slot warm. It does not create the account.
+func (s *StateDB) WarmAddress32Slot(addr common.Address32, slot common.Hash) {
+	if s.Address32SlotWarm(addr, slot) {
+		return
+	}
+
+	if s.address32Slots == nil {
+		s.address32Slots = make(map[common.Address32]map[common.Hash]struct{})
+	}
+
+	if s.address32Slots[addr] == nil {
+		s.address32Slots[addr] = make(map[common.Hash]struct{})
+	}
+
+	s.address32Slots[addr][slot] = struct{}{}
+	s.journal.append(address32SlotWarmChange{account: addr, slot: slot})
 }
 
 // AsStateDB returns the state database behind db.
@@ -337,4 +561,93 @@ func (ch address32CodeChange) copy() journalEntry {
 		prev:     common.CopyBytes(ch.prev),
 		prevHash: common.CopyBytes(ch.prevHash),
 	}
+}
+
+type address32CreatedInTransactionChange struct {
+	account common.Address32
+}
+
+func (ch address32CreatedInTransactionChange) revert(s *StateDB) {
+	obj := s.liveAddress32(ch.account)
+
+	if obj == nil {
+		return
+	}
+
+	obj.createdInTransaction = false
+}
+
+func (ch address32CreatedInTransactionChange) dirtied() *common.Address { return nil }
+
+func (ch address32CreatedInTransactionChange) copy() journalEntry {
+	return address32CreatedInTransactionChange{account: ch.account}
+}
+
+type address32SelfDestructChange struct {
+	account common.Address32
+}
+
+func (ch address32SelfDestructChange) revert(s *StateDB) {
+	obj := s.liveAddress32(ch.account)
+
+	if obj == nil {
+		return
+	}
+
+	obj.selfDestructed = false
+}
+
+func (ch address32SelfDestructChange) dirtied() *common.Address { return nil }
+
+func (ch address32SelfDestructChange) copy() journalEntry {
+	return address32SelfDestructChange{account: ch.account}
+}
+
+type address32StorageChange struct {
+	account common.Address32
+	key     common.Hash
+	prev    common.Hash
+	had     bool
+}
+
+func (ch address32StorageChange) revert(s *StateDB) {
+	obj := s.liveAddress32(ch.account)
+
+	if obj == nil || obj.storage == nil {
+		return
+	}
+
+	if ch.had {
+		obj.storage[ch.key] = ch.prev
+		return
+	}
+
+	delete(obj.storage, ch.key)
+}
+
+func (ch address32StorageChange) dirtied() *common.Address { return nil }
+
+func (ch address32StorageChange) copy() journalEntry {
+	return address32StorageChange{account: ch.account, key: ch.key, prev: ch.prev, had: ch.had}
+}
+
+type address32SlotWarmChange struct {
+	account common.Address32
+	slot    common.Hash
+}
+
+func (ch address32SlotWarmChange) revert(s *StateDB) {
+	slots := s.address32Slots[ch.account]
+
+	if slots == nil {
+		return
+	}
+
+	delete(slots, ch.slot)
+}
+
+func (ch address32SlotWarmChange) dirtied() *common.Address { return nil }
+
+func (ch address32SlotWarmChange) copy() journalEntry {
+	return address32SlotWarmChange{account: ch.account, slot: ch.slot}
 }

@@ -50,7 +50,9 @@ func enableAddress32(jt *JumpTable) {
 	enableMirrored(jt, EXTCODEHASH32, jt[EXTCODEHASH], opExtCodeHash32, gasAccountCheck32)
 	enableMirrored(jt, EXTCODECOPY32, jt[EXTCODECOPY], opExtCodeCopy32, gasExtCodeCopy32)
 	enableMirrored(jt, CALL32, jt[CALL], opCall32, gasCall32)
+	enableMirrored(jt, DELEGATECALL32, jt[DELEGATECALL], opDelegateCall32, gasDelegateCall32)
 	enableMirrored(jt, STATICCALL32, jt[STATICCALL], opStaticCall32, gasStaticCall32)
+	enableMirrored(jt, SELFDESTRUCT32, jt[SELFDESTRUCT], opSelfdestruct32, gasSelfdestruct32)
 	enableMirrored(jt, CREATE32, jt[CREATE], opCreate32, nil)
 	enableMirrored(jt, CREATE232, jt[CREATE2], opCreate232, nil)
 }
@@ -298,6 +300,103 @@ func gasStaticCallAddress32(evm *EVM, contract *Contract, stack *Stack, mem *Mem
 	return addChargedCallGas(contract, gas, err, cold, delegation)
 }
 
+// gasDelegateCall32 charges DELEGATECALL gas. An address20 word uses the mirrored calculator.
+func gasDelegateCall32(fallback gasFunc) gasFunc {
+	return func(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+		return withAccount(stack.Back(1), evm,
+			func(common.Address) (uint64, error) {
+				return fallback(evm, contract, stack, mem, memorySize)
+			},
+			func(db *state.StateDB, addr common.Address32) (uint64, error) {
+				return gasDelegateCallAddress32(evm, contract, stack, mem, memorySize, db, addr)
+			},
+		)
+	}
+}
+
+func gasDelegateCallAddress32(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64, db *state.StateDB, addr common.Address32) (uint64, error) {
+	cold, delegation, err := chargeAddress32CallSurcharge(evm, contract, db, addr)
+
+	if err != nil {
+		return 0, err
+	}
+
+	gas, err := gasDelegateCall(evm, contract, stack, mem, memorySize)
+
+	return addChargedCallGas(contract, gas, err, cold, delegation)
+}
+
+// gasSelfdestruct32 charges SELFDESTRUCT gas.
+// An address20 contract destroying to an address20 uses the mirrored calculator.
+func gasSelfdestruct32(fallback gasFunc) gasFunc {
+	return func(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+		beneficiary, err := accountFromSlot(stack.peek())
+
+		if err != nil {
+			return 0, err
+		}
+
+		if _, address32Frame := contract.Address32(); !address32Frame {
+			if _, address20 := beneficiary.Address20(); address20 {
+				return fallback(evm, contract, stack, mem, memorySize)
+			}
+		}
+
+		return gasSelfdestructAccount(evm, contract, beneficiary)
+	}
+}
+
+func gasSelfdestructAccount(evm *EVM, contract *Contract, beneficiary common.StateAddress) (uint64, error) {
+	db, err := address32DB(evm)
+
+	if err != nil {
+		return 0, err
+	}
+
+	var (
+		gas   uint64
+		empty bool
+	)
+
+	beneficiary.Use(func(addr common.Address) {
+		if !evm.StateDB.AddressInAccessList(addr) {
+			evm.StateDB.AddAddressToAccessList(addr)
+			gas = params.ColdAccountAccessCostEIP2929
+		}
+
+		empty = evm.StateDB.Empty(addr)
+	}, func(addr common.Address32) {
+		if !db.Address32InAccessList(addr) {
+			db.AddAddress32ToAccessList(addr)
+			gas = params.ColdAccountAccessCostEIP2929
+		}
+
+		empty = db.Address32Empty(addr)
+	})
+
+	if empty && frameBalance(evm, db, contract).Sign() != 0 {
+		gas += params.CreateBySelfdestructGas
+	}
+
+	return gas, nil
+}
+
+func frameBalance(evm *EVM, db *state.StateDB, contract *Contract) *uint256.Int {
+	var balance *uint256.Int
+
+	contract.stateAddress().Use(func(addr common.Address) {
+		balance = evm.StateDB.GetBalance(addr)
+	}, func(addr common.Address32) {
+		balance = db.Address32Balance(addr)
+	})
+
+	if balance == nil {
+		return new(uint256.Int)
+	}
+
+	return balance
+}
+
 func opBalance32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	return withAccount(scope.Stack.peek(), evm,
 		func(common.Address) ([]byte, error) {
@@ -405,6 +504,117 @@ func opStaticCall32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 
 	ret, returnGas, callErr := evm.CallAccount(scope.Contract.stateAddress(), target, args, gas, new(uint256.Int), true)
 	return finishOpCall(evm, scope, temp, retOffset, retSize, ret, returnGas, callErr)
+}
+
+// opDelegateCall32 runs address32 code in the caller's account.
+// An address20 target, including a precompile, fails and returns the gas.
+func opDelegateCall32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	stack := scope.Stack
+	temp := stack.pop()
+	gas := evm.callGasTemp
+	addrWord, inOffset, inSize, retOffset, retSize := stack.pop(), stack.pop(), stack.pop(), stack.pop(), stack.pop()
+	args := scope.Memory.GetPtr(inOffset.Uint64(), inSize.Uint64())
+	target, err := accountFromSlot(&addrWord)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if _, address20 := target.Address20(); address20 {
+		return finishOpCall(evm, scope, temp, retOffset, retSize, nil, gas, ErrExecutionReverted)
+	}
+
+	addr, _ := target.Address32()
+	ret, returnGas, callErr := evm.delegateCallAddress32(scope.Contract, addr, args, gas)
+	return finishOpCall(evm, scope, temp, retOffset, retSize, ret, returnGas, callErr)
+}
+
+// opSelfdestruct32 sends the frame balance to an address20 or an address32.
+// A contract created in this transaction is registered for deletion.
+func opSelfdestruct32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	if evm.readOnly {
+		return nil, ErrWriteProtection
+	}
+
+	word := scope.Stack.pop()
+	beneficiary, err := accountFromSlot(&word)
+
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := address32DB(evm)
+
+	if err != nil {
+		return nil, err
+	}
+
+	balance := frameBalance(evm, db, scope.Contract)
+	debitSelfdestruct(evm, db, scope.Contract, balance)
+	creditSelfdestruct(evm, db, beneficiary, balance)
+	markSelfdestruct(evm, db, scope.Contract)
+
+	traceSelfdestruct32(evm, scope.Contract, beneficiary, balance)
+	return nil, errStopToken
+}
+
+func debitSelfdestruct(evm *EVM, db *state.StateDB, contract *Contract, balance *uint256.Int) {
+	contract.stateAddress().Use(func(addr common.Address) {
+		evm.StateDB.SubBalance(addr, balance, tracing.BalanceDecreaseSelfdestruct)
+	}, func(addr common.Address32) {
+		if balance.IsZero() {
+			return
+		}
+
+		db.SubAddress32Balance(addr, balance)
+	})
+}
+
+func markSelfdestruct(evm *EVM, db *state.StateDB, contract *Contract) {
+	contract.stateAddress().Use(func(addr common.Address) {
+		evm.StateDB.SelfDestruct6780(addr)
+	}, func(addr common.Address32) {
+		db.SelfDestructAddress32(addr)
+	})
+}
+
+func creditSelfdestruct(evm *EVM, db *state.StateDB, beneficiary common.StateAddress, balance *uint256.Int) {
+	beneficiary.Use(func(addr common.Address) {
+		evm.StateDB.AddBalance(addr, balance, tracing.BalanceIncreaseSelfdestruct)
+	}, func(addr common.Address32) {
+		if balance.IsZero() {
+			return
+		}
+
+		db.AddAddress32Balance(addr, balance)
+	})
+}
+
+func traceSelfdestruct32(evm *EVM, contract *Contract, beneficiary common.StateAddress, balance *uint256.Int) {
+	tracer := evm.Config.Tracer
+
+	if tracer == nil || balance == nil {
+		return
+	}
+
+	// The tracer addresses are 20 bytes. An address32 account is not reported here.
+	if _, ok := contract.Address32(); ok {
+		return
+	}
+
+	to, ok := beneficiary.Address20()
+
+	if !ok {
+		return
+	}
+
+	if tracer.OnEnter != nil {
+		tracer.OnEnter(evm.depth, byte(SELFDESTRUCT32), contract.Address(), to, []byte{}, 0, balance.ToBig())
+	}
+
+	if tracer.OnExit != nil {
+		tracer.OnExit(evm.depth, []byte{}, 0, nil, false)
+	}
 }
 
 func finishOpCall(evm *EVM, scope *ScopeContext, temp, retOffset, retSize uint256.Int, ret []byte, returnGas uint64, err error) ([]byte, error) {

@@ -40,12 +40,12 @@ var (
 )
 
 func TestAddress32OpcodeBytes(t *testing.T) {
-	if vm.BALANCE32 != 0xa5 || vm.EXTCODESIZE32 != 0xa6 || vm.EXTCODECOPY32 != 0xa7 || vm.EXTCODEHASH32 != 0xa8 || vm.CALL32 != 0xa9 || vm.STATICCALL32 != 0xab {
-		t.Fatalf("opcodes = %#x %#x %#x %#x %#x %#x", vm.BALANCE32, vm.EXTCODESIZE32, vm.EXTCODECOPY32, vm.EXTCODEHASH32, vm.CALL32, vm.STATICCALL32)
+	if vm.BALANCE32 != 0xa5 || vm.EXTCODESIZE32 != 0xa6 || vm.EXTCODECOPY32 != 0xa7 || vm.EXTCODEHASH32 != 0xa8 || vm.CALL32 != 0xa9 || vm.DELEGATECALL32 != 0xaa || vm.STATICCALL32 != 0xab {
+		t.Fatalf("opcodes = %#x %#x %#x %#x %#x %#x %#x", vm.BALANCE32, vm.EXTCODESIZE32, vm.EXTCODECOPY32, vm.EXTCODEHASH32, vm.CALL32, vm.DELEGATECALL32, vm.STATICCALL32)
 	}
 
-	if vm.CREATE32 != 0xac || vm.CREATE232 != 0xad {
-		t.Fatalf("create opcodes = %#x %#x", vm.CREATE32, vm.CREATE232)
+	if vm.CREATE32 != 0xac || vm.CREATE232 != 0xad || vm.SELFDESTRUCT32 != 0xae {
+		t.Fatalf("create opcodes = %#x %#x %#x", vm.CREATE32, vm.CREATE232, vm.SELFDESTRUCT32)
 	}
 }
 
@@ -156,6 +156,12 @@ func TestAddress32OpcodeGasMatchesMirroredOpcodes(t *testing.T) {
 		{"CALL cold and warm", callTwice(vm.CALL, callAddress20Padded[:], 0), callTwice(vm.CALL32, callAddress32[:], 0)},
 		{"CALL value", callOnce(vm.CALL, callAddress20Padded[:], 1), callOnce(vm.CALL32, callAddress32[:], 1)},
 		{"CALL new account", callOnce(vm.CALL, missingAddress20Padded[:], 1), callOnce(vm.CALL32, missingAddress32[:], 1)},
+		{"DELEGATECALL cold", delegateOnce(vm.DELEGATECALL, callAddress20Padded[:]), delegateOnce(vm.DELEGATECALL32, callAddress32[:])},
+		{"DELEGATECALL cold and warm", delegateTwice(vm.DELEGATECALL, callAddress20Padded[:]), delegateTwice(vm.DELEGATECALL32, callAddress32[:])},
+		{"DELEGATECALL address20 word", delegateOnce(vm.DELEGATECALL, callAddress20Padded[:]), delegateOnce(vm.DELEGATECALL32, callAddress20Padded[:])},
+		{"SELFDESTRUCT cold", selfdestructOnce(vm.SELFDESTRUCT, missingAddress20Padded[:]), selfdestructOnce(vm.SELFDESTRUCT32, missingAddress32[:])},
+		{"SELFDESTRUCT warm", touchThenSelfdestruct(vm.BALANCE, vm.SELFDESTRUCT, callAddress20Padded[:]), touchThenSelfdestruct(vm.BALANCE32, vm.SELFDESTRUCT32, callAddress32[:])},
+		{"SELFDESTRUCT address20 word", selfdestructOnce(vm.SELFDESTRUCT, callAddress20Padded[:]), selfdestructOnce(vm.SELFDESTRUCT32, callAddress20Padded[:])},
 	}
 
 	cfg := address32Config()
@@ -441,7 +447,7 @@ func TestCall32WithValueInStaticCallIsWriteProtected(t *testing.T) {
 func TestAddress32OpcodesUnassignedBeforeFork(t *testing.T) {
 	cfg := optimismConfig()
 
-	for _, op := range []byte{0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xab} {
+	for _, op := range []byte{0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xae} {
 		run := runOpcode(t, cfg, []byte{op}, nil, nil)
 		var invalid *vm.ErrInvalidOpCode
 
@@ -641,6 +647,33 @@ func callOnce(op vm.OpCode, word []byte, value uint64) []byte {
 	code = append(code, push32(word)...)
 	code = append(code, push32Uint(500_000)...)
 	return append(code, byte(op))
+}
+
+func delegateOnce(op vm.OpCode, word []byte) []byte {
+	code := []byte{
+		byte(vm.PUSH1), 0,
+		byte(vm.PUSH1), 0,
+		byte(vm.PUSH1), 0,
+		byte(vm.PUSH1), 0,
+	}
+	code = append(code, push32(word)...)
+	code = append(code, push32Uint(500_000)...)
+	return append(code, byte(op))
+}
+
+func delegateTwice(op vm.OpCode, word []byte) []byte {
+	once := delegateOnce(op, word)
+	code := append(append([]byte{}, once...), byte(vm.POP))
+	return append(code, once...)
+}
+
+func selfdestructOnce(op vm.OpCode, word []byte) []byte {
+	return append(push32(word), byte(op))
+}
+
+func touchThenSelfdestruct(touch, destruct vm.OpCode, word []byte) []byte {
+	code := append(push32(word), byte(touch), byte(vm.POP))
+	return append(append(code, push32(word)...), byte(destruct))
 }
 
 func callTwice(op vm.OpCode, word []byte, value uint64) []byte {
