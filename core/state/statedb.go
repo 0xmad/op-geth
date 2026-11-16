@@ -98,6 +98,14 @@ type StateDB struct {
 	// A word in the address20 subspace uses accessList instead.
 	address32Access map[common.Address32]struct{}
 
+	// address32Slots is the warm set for address32 storage slots.
+	address32Slots map[common.Address32]map[common.Hash]struct{}
+
+	// address32Destruct holds address32 accounts registered for deletion
+	// at the end of a transaction. The Cancun rule fills this only for a
+	// contract created in that same transaction.
+	address32Destruct map[common.Address32]*address32Account
+
 	// This map holds 'deleted' objects. An object with the same address
 	// might also occur in the 'stateObjects' map due to account
 	// resurrection. The account value is tracked as the original value
@@ -727,6 +735,8 @@ func (s *StateDB) Copy() *StateDB {
 		stateObjectsDestruct: make(map[common.Address]*stateObject, len(s.stateObjectsDestruct)),
 		address32Accounts:    make(map[common.Address32]*address32Account, len(s.address32Accounts)),
 		address32Access:      maps.Clone(s.address32Access),
+		address32Slots:       copyAddress32Slots(s.address32Slots),
+		address32Destruct:    make(map[common.Address32]*address32Account, len(s.address32Destruct)),
 		mutations:            make(map[common.Address]*mutation, len(s.mutations)),
 		dbErr:                s.dbErr,
 		refund:               s.refund,
@@ -757,6 +767,9 @@ func (s *StateDB) Copy() *StateDB {
 	}
 	for addr, obj := range s.address32Accounts {
 		state.address32Accounts[addr] = obj.copy()
+	}
+	for addr, obj := range s.address32Destruct {
+		state.address32Destruct[addr] = obj.copy()
 	}
 	// Deep copy cached state objects.
 	for addr, obj := range s.stateObjects {
@@ -836,6 +849,7 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			log.Error("Failed to prefetch addresses", "addresses", len(addressesToPrefetch), "err", err)
 		}
 	}
+	s.finaliseAddress32()
 	// Invalidate journal because reverting across transactions is not allowed.
 	s.clearJournalAndRefund()
 }
@@ -1276,6 +1290,11 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 			return nil, err
 		}
 	}
+	for _, set := range s.commitAddress32Storage() {
+		if err := merge(set); err != nil {
+			return nil, err
+		}
+	}
 	// Handle all state updates afterwards, concurrently to one another to shave
 	// off some milliseconds from the commit operation. Also accumulate the code
 	// writes to run in parallel with the computations.
@@ -1361,6 +1380,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 	// Clear all internal flags and update state root at the end.
 	s.mutations = make(map[common.Address]*mutation)
 	s.stateObjectsDestruct = make(map[common.Address]*stateObject)
+	s.address32Destruct = make(map[common.Address32]*address32Account)
 
 	origin := s.originalRoot
 	s.originalRoot = root
@@ -1472,6 +1492,7 @@ func (s *StateDB) Prepare(rules params.Rules, sender, coinbase common.Address, d
 	}
 	// Warmth is per transaction. Drop leftovers from the previous one.
 	s.address32Access = make(map[common.Address32]struct{})
+	s.address32Slots = make(map[common.Address32]map[common.Hash]struct{})
 	if rules.IsEIP2929 {
 		// Clear out any leftover from previous executions
 		al := newAccessList()

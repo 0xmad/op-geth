@@ -46,48 +46,59 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 			evm.StateDB.AddSlotToAccessList(contract.Address(), slot)
 		}
 		value := common.Hash(y.Bytes32())
-
-		if current == value { // noop (1)
-			// EIP 2200 original clause:
-			//		return params.SloadGasEIP2200, nil
-			return cost + params.WarmStorageReadCostEIP2929, nil // SLOAD_GAS
+		cost, sub, add := sstoreGas(current, original, value, cost != 0, clearingRefund)
+		if sub > 0 {
+			evm.StateDB.SubRefund(sub)
 		}
-		if original == current {
-			if original == (common.Hash{}) { // create slot (2.1.1)
-				return cost + params.SstoreSetGasEIP2200, nil
-			}
-			if value == (common.Hash{}) { // delete slot (2.1.2b)
-				evm.StateDB.AddRefund(clearingRefund)
-			}
-			// EIP-2200 original clause:
-			//		return params.SstoreResetGasEIP2200, nil // write existing slot (2.1.2)
-			return cost + (params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929), nil // write existing slot (2.1.2)
+		if add > 0 {
+			evm.StateDB.AddRefund(add)
 		}
-		if original != (common.Hash{}) {
-			if current == (common.Hash{}) { // recreate slot (2.2.1.1)
-				evm.StateDB.SubRefund(clearingRefund)
-			} else if value == (common.Hash{}) { // delete slot (2.2.1.2)
-				evm.StateDB.AddRefund(clearingRefund)
-			}
-		}
-		if original == value {
-			if original == (common.Hash{}) { // reset to original inexistent slot (2.2.2.1)
-				// EIP 2200 Original clause:
-				//evm.StateDB.AddRefund(params.SstoreSetGasEIP2200 - params.SloadGasEIP2200)
-				evm.StateDB.AddRefund(params.SstoreSetGasEIP2200 - params.WarmStorageReadCostEIP2929)
-			} else { // reset to original existing slot (2.2.2.2)
-				// EIP 2200 Original clause:
-				//	evm.StateDB.AddRefund(params.SstoreResetGasEIP2200 - params.SloadGasEIP2200)
-				// - SSTORE_RESET_GAS redefined as (5000 - COLD_SLOAD_COST)
-				// - SLOAD_GAS redefined as WARM_STORAGE_READ_COST
-				// Final: (5000 - COLD_SLOAD_COST) - WARM_STORAGE_READ_COST
-				evm.StateDB.AddRefund((params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929) - params.WarmStorageReadCostEIP2929)
-			}
-		}
-		// EIP-2200 original clause:
-		//return params.SloadGasEIP2200, nil // dirty update (2.2)
-		return cost + params.WarmStorageReadCostEIP2929, nil // dirty update (2.2)
+		return cost, nil
 	}
+}
+
+// sstoreGas is the EIP-2200/2929/3529 SSTORE charge shared by address20 and address32.
+// subRefund is applied before addRefund. Both can be nonzero when a cleared slot is restored.
+func sstoreGas(current, original, value common.Hash, cold bool, clearingRefund uint64) (uint64, uint64, uint64) {
+	var cost uint64
+	if cold {
+		cost = params.ColdSloadCostEIP2929
+	}
+
+	if current == value { // noop (1)
+		return cost + params.WarmStorageReadCostEIP2929, 0, 0
+	}
+
+	if original == current {
+		if original == (common.Hash{}) { // create slot (2.1.1)
+			return cost + params.SstoreSetGasEIP2200, 0, 0
+		}
+		var add uint64
+		if value == (common.Hash{}) { // delete slot (2.1.2b)
+			add = clearingRefund
+		}
+		return cost + (params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929), 0, add // write existing slot (2.1.2)
+	}
+
+	var sub, add uint64
+
+	if original != (common.Hash{}) {
+		if current == (common.Hash{}) { // recreate slot (2.2.1.1)
+			sub = clearingRefund
+		} else if value == (common.Hash{}) { // delete slot (2.2.1.2)
+			add = clearingRefund
+		}
+	}
+
+	if original == value {
+		if original == (common.Hash{}) { // reset to original inexistent slot (2.2.2.1)
+			add += params.SstoreSetGasEIP2200 - params.WarmStorageReadCostEIP2929
+		} else { // reset to original existing slot (2.2.2.2)
+			add += (params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929) - params.WarmStorageReadCostEIP2929
+		}
+	}
+
+	return cost + params.WarmStorageReadCostEIP2929, sub, add // dirty update (2.2)
 }
 
 // gasSLoadEIP2929 calculates dynamic gas for SLOAD according to EIP-2929

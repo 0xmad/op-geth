@@ -169,6 +169,73 @@ func (evm *EVM) runAddress32(db *state.StateDB, caller common.StateAddress, addr
 	return ret, gas, err
 }
 
+// delegateCallAddress32 runs addr's code in the caller's account.
+// Storage, balance, caller, and value stay with the caller. No value moves.
+func (evm *EVM) delegateCallAddress32(caller *Contract, addr common.Address32, input []byte, gas uint64) ([]byte, uint64, error) {
+	if evm.depth > int(params.CallCreateDepth) {
+		return nil, gas, ErrDepth
+	}
+
+	db, err := address32DB(evm)
+
+	if err != nil {
+		return nil, gas, err
+	}
+
+	code := db.Address32Code(addr)
+
+	if db.Error() != nil {
+		return nil, gas, db.Error()
+	}
+
+	if len(code) == 0 {
+		return nil, gas, nil
+	}
+
+	snapshot := evm.StateDB.Snapshot()
+	contract := newDelegateFrame(caller, gas, evm.jumpDests)
+	contract.SetCallCode(db.Address32CodeHash(addr), code)
+	ret, err := evm.Run(contract, input, false)
+	gas = contract.Gas
+
+	if err != nil {
+		evm.StateDB.RevertToSnapshot(snapshot)
+
+		if err != ErrExecutionReverted {
+			gas = 0
+		}
+	}
+
+	return ret, gas, err
+}
+
+func newDelegateFrame(parent *Contract, gas uint64, jumpDests JumpDestCache) *Contract {
+	self := parent.stateAddress()
+	var self20 common.Address
+
+	self.Use(func(addr common.Address) {
+		self20 = addr
+	}, func(common.Address32) {})
+
+	caller20 := common.Address{}
+
+	if _, ok := parent.Caller32(); !ok {
+		caller20 = parent.Caller()
+	}
+
+	contract := NewContract(caller20, self20, parent.Value(), gas, jumpDests)
+
+	if addr, ok := parent.Address32(); ok {
+		contract.setAddress32(addr)
+	}
+
+	if addr, ok := parent.Caller32(); ok {
+		contract.setCaller32(addr)
+	}
+
+	return contract
+}
+
 func (evm *EVM) transferToCodeless(caller, target common.StateAddress, gas uint64, value *uint256.Int) ([]byte, uint64, error) {
 	if value.IsZero() {
 		return nil, gas, nil

@@ -17,7 +17,10 @@
 package vm
 
 import (
+	"errors"
+
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 )
 
@@ -30,6 +33,11 @@ func address32FrameTable(base *JumpTable) *JumpTable {
 	jt[ADDRESS].execute = opAddress32Frame
 	jt[CALLER].execute = opCaller32Frame
 	jt[ORIGIN].execute = opOrigin32Frame
+	jt[SELFBALANCE].execute = opSelfBalanceAddress32
+	jt[SLOAD].execute = opSloadAddress32
+	jt[SLOAD].dynamicGas = gasSLoadAddress32
+	jt[SSTORE].execute = opSstoreAddress32
+	jt[SSTORE].dynamicGas = gasSStoreAddress32
 
 	halt := &operation{
 		execute:  opAddress20Opcode,
@@ -85,6 +93,129 @@ func opOrigin32Frame(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) 
 // handed to the frame because the error is not a revert.
 func opAddress20Opcode(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	return nil, &ErrInvalidOpCode{opcode: scope.Contract.GetOp(*pc)}
+}
+
+func opSelfBalanceAddress32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	db, err := address32DB(evm)
+
+	if err != nil {
+		return nil, err
+	}
+
+	addr, ok := scope.Contract.Address32()
+
+	if !ok {
+		return nil, errors.New("address32 frame required")
+	}
+
+	scope.Stack.push(db.Address32Balance(addr))
+	return nil, nil
+}
+
+func opSloadAddress32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	db, err := address32DB(evm)
+
+	if err != nil {
+		return nil, err
+	}
+
+	addr, ok := scope.Contract.Address32()
+
+	if !ok {
+		return nil, errors.New("address32 frame required")
+	}
+
+	loc := scope.Stack.peek()
+	loc.SetBytes(db.Address32State(addr, loc.Bytes32()).Bytes())
+	return nil, nil
+}
+
+func opSstoreAddress32(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	if evm.readOnly {
+		return nil, ErrWriteProtection
+	}
+
+	db, err := address32DB(evm)
+
+	if err != nil {
+		return nil, err
+	}
+
+	addr, ok := scope.Contract.Address32()
+
+	if !ok {
+		return nil, errors.New("address32 frame required")
+	}
+
+	loc := scope.Stack.pop()
+	val := scope.Stack.pop()
+	db.SetAddress32State(addr, loc.Bytes32(), val.Bytes32())
+	return nil, nil
+}
+
+func gasSLoadAddress32(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+	db, err := address32DB(evm)
+
+	if err != nil {
+		return 0, err
+	}
+
+	addr, ok := contract.Address32()
+
+	if !ok {
+		return 0, errors.New("address32 storage read requires an address32 frame")
+	}
+
+	slot := common.Hash(stack.peek().Bytes32())
+
+	if db.Address32SlotWarm(addr, slot) {
+		return params.WarmStorageReadCostEIP2929, nil
+	}
+
+	db.WarmAddress32Slot(addr, slot)
+	return params.ColdSloadCostEIP2929, nil
+}
+
+func gasSStoreAddress32(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+	if contract.Gas <= params.SstoreSentryGasEIP2200 {
+		return 0, errors.New("not enough gas for reentrancy sentry")
+	}
+
+	db, err := address32DB(evm)
+
+	if err != nil {
+		return 0, err
+	}
+
+	addr, ok := contract.Address32()
+
+	if !ok {
+		return 0, errors.New("address32 storage write requires an address32 frame")
+	}
+
+	var (
+		value    = common.Hash(stack.Back(1).Bytes32())
+		slot     = common.Hash(stack.peek().Bytes32())
+		current  = db.Address32State(addr, slot)
+		original = db.Address32CommittedState(addr, slot)
+		cold     = !db.Address32SlotWarm(addr, slot)
+	)
+
+	if cold {
+		db.WarmAddress32Slot(addr, slot)
+	}
+
+	cost, sub, add := sstoreGas(current, original, value, cold, params.SstoreClearsScheduleRefundEIP3529)
+
+	if sub > 0 {
+		evm.StateDB.SubRefund(sub)
+	}
+
+	if add > 0 {
+		evm.StateDB.AddRefund(add)
+	}
+
+	return cost, nil
 }
 
 func wordFromAccount(account common.StateAddress) *uint256.Int {

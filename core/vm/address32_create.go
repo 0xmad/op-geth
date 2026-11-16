@@ -96,6 +96,7 @@ func (evm *EVM) createAddress32(db *state.StateDB, caller, address common.Addres
 
 	snapshot := evm.StateDB.Snapshot()
 	db.SetAddress32Nonce(address, 1)
+	db.CreateAddress32Contract(address)
 
 	if !value.IsZero() {
 		db.SubAddress32Balance(caller, value)

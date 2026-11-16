@@ -47,6 +47,10 @@ func (s *StateDB) AddAddress20AccessPreimage(preimage []byte) error {
 // A pending write in this state is returned ahead of the committed trie.
 // A missing account returns a nil account and a nil error.
 func (s *StateDB) Address32(addr common.Address32) (*types.StateAccount, error) {
+	if s.address32Destroyed(addr) {
+		return nil, nil
+	}
+
 	if obj := s.liveAddress32(addr); obj != nil {
 		return obj.data.Copy(), nil
 	}
@@ -170,6 +174,72 @@ func (s *StateDB) Address32StorageRoot(addr common.Address32) common.Hash {
 // Address32State returns the address32 storage value at key, or the zero
 // hash when the account or the slot is absent.
 func (s *StateDB) Address32State(addr common.Address32, key common.Hash) common.Hash {
+	if s.address32Destroyed(addr) {
+		return common.Hash{}
+	}
+
+	if obj := s.liveAddress32(addr); obj != nil {
+		if val, ok := obj.storage[key]; ok {
+			return val
+		}
+	}
+
+	return s.address32TrieState(addr, key)
+}
+
+// Address32CommittedState returns the storage value from before this transition.
+func (s *StateDB) Address32CommittedState(addr common.Address32, key common.Hash) common.Hash {
+	if obj := s.liveAddress32(addr); obj != nil {
+		if val, ok := obj.originStorage[key]; ok {
+			return val
+		}
+	}
+
+	val := s.address32TrieState(addr, key)
+
+	if obj := s.liveAddress32(addr); obj != nil {
+		if obj.originStorage == nil {
+			obj.originStorage = make(map[common.Hash]common.Hash)
+		}
+
+		obj.originStorage[key] = val
+	}
+
+	return val
+}
+
+// SetAddress32State writes key on the address32 for this transition.
+// The returned hash is the value replaced.
+func (s *StateDB) SetAddress32State(addr common.Address32, key, value common.Hash) common.Hash {
+	prev := s.Address32State(addr, key)
+
+	if prev == value {
+		return prev
+	}
+
+	obj := s.getOrNewAddress32Account(addr)
+
+	if obj.originStorage == nil {
+		obj.originStorage = make(map[common.Hash]common.Hash)
+	}
+
+	if _, ok := obj.originStorage[key]; !ok {
+		obj.originStorage[key] = s.address32TrieState(addr, key)
+	}
+
+	if obj.storage == nil {
+		obj.storage = make(map[common.Hash]common.Hash)
+	}
+
+	old, had := obj.storage[key]
+	s.journal.append(address32StorageChange{account: addr, key: key, prev: old, had: had})
+	obj.storage[key] = value
+	obj.dirty = true
+
+	return prev
+}
+
+func (s *StateDB) address32TrieState(addr common.Address32, key common.Hash) common.Hash {
 	acc := s.address32Account(addr)
 
 	if acc == nil || acc.Root == (common.Hash{}) || acc.Root == types.EmptyRootHash {
